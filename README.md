@@ -245,19 +245,7 @@ lv_font_conv --font assets/DejaVuSansMono.ttf \
 
 Without these patches, fonts compile but render as invisible.
 
-## Converting Lucide icons
 
-The UI uses a small set of [Lucide](https://lucide.dev) icons (bluetooth + battery states) converted to RGB565 / RGB565A8 C arrays for LVGL.
-
-```bash
-node tools/png_to_lvgl.js assets/icon_bluetooth_48.png icon_bluetooth_data ICON_BLUETOOTH_WIDTH ICON_BLUETOOTH_HEIGHT
-```
-
-Default tint is white (`0xFFFFFF`); Lucide PNGs ship as black-on-transparent and would render invisible against the dark UI without it. Pass `--no-tint` for pre-coloured artwork like the logo. Battery icons use RGB565A8 (alpha plane) so they blend cleanly over the splash; the rest are baked RGB565 over the panel colour. Paste the converter output into `firmware/src/icons.h`.
-
-## Splash animations
-
-The animations come from [claudepix.vercel.app](https://claudepix.vercel.app), [@amaanbuilds](https://x.com/amaanbuilds)'s library of Clawd sprites. `tools/scrape_claudepix.js` evaluates the site's JavaScript in a Node VM to pull out frame data and palettes, then `tools/convert_to_c.js` turns everything into RGB565 C arrays and writes `firmware/src/splash_animations.h`. A third script bundles them for the web-flasher hero canvas.
 
 To re-pull (e.g. when the source library updates):
 
