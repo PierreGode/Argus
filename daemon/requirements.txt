@@ -1,0 +1,9 @@
+bleak
+httpx
+pyserial
+PySide6
+pyinstaller
+# Cross-platform OS-native secret store wrapper for the GitHub PAT.
+# Backends used: Windows Credential Manager, macOS Keychain,
+# Linux Secret Service (needs libsecret) or KWallet.
+keyring

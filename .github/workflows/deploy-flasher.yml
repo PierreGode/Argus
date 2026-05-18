@@ -1,0 +1,165 @@
+name: Build firmware and deploy web flasher
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "firmware/**"
+      - "docs/**"
+      - "daemon/**"
+      - ".github/workflows/deploy-flasher.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  # Cross-platform daemon build. Each runner produces a single-file PyInstaller
+  # binary uploaded as an artifact; the deploy job collects all three and
+  # stages them in site/daemon/.
+  build-daemon:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            out_name: argus-daemon.exe
+            asset_name: argus-daemon-windows.exe
+          - os: macos-latest
+            out_name: argus-daemon
+            asset_name: argus-daemon-macos
+          - os: ubuntu-latest
+            out_name: argus-daemon
+            asset_name: argus-daemon-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: daemon/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r daemon/requirements.txt
+
+      - name: Build daemon binary
+        # --paths daemon: resolve local sibling imports (claude_logs, github_stats, tray_ui).
+        # --windowed:    suppress the console window on Windows / macOS.
+        # Linux gets a console build because tk/pystray emit useful logs there
+        # and there's no GUI-bundling distinction on Linux anyway.
+        shell: bash
+        run: |
+          MODE_FLAG="--windowed"
+          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
+            MODE_FLAG="--console"
+          fi
+          pyinstaller --onefile $MODE_FLAG \
+            --name argus-daemon \
+            --paths daemon \
+            --hidden-import claude_logs \
+            --hidden-import github_stats \
+            --hidden-import tray_ui \
+            daemon/argus-daemon.py
+
+      - name: Rename to per-platform asset name
+        shell: bash
+        run: |
+          mkdir -p staged
+          cp "dist/${{ matrix.out_name }}" "staged/${{ matrix.asset_name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: daemon-${{ matrix.os }}
+          path: staged/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  build-and-deploy:
+    needs: build-daemon
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Install PlatformIO + esptool
+        run: |
+          python -m pip install --upgrade pip
+          pip install platformio esptool
+
+      - name: Build firmware (ESP32-S3)
+        run: pio run -d firmware
+
+      - name: Download daemon artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: daemon-artifacts
+          pattern: daemon-*
+          merge-multiple: true
+
+      - name: Stage flasher site
+        run: |
+          mkdir -p site/firmware site/daemon
+          cp -r docs/. site/
+
+          BOOT_APP0=$(find ~/.platformio/packages -name boot_app0.bin | head -n 1)
+          if [ -z "$BOOT_APP0" ]; then
+            echo "boot_app0.bin not found"; exit 1
+          fi
+
+          # Merge bootloader + partitions + boot_app0 + firmware into one
+          # offset-0 image that ESP Web Tools can flash with a single button.
+          # The Waveshare ESP32-S3-Touch-LCD-4B ships with 16MB flash (8MB OPI
+          # PSRAM is separate and not touched by this image).
+          S3_DIR=firmware/.pio/build/waveshare_amoled_216
+          python -m esptool --chip esp32s3 merge_bin \
+            --output site/firmware/argus-esp32s3.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 16MB \
+            0x0000   "$S3_DIR/bootloader.bin" \
+            0x8000   "$S3_DIR/partitions.bin" \
+            0xe000   "$BOOT_APP0" \
+            0x10000  "$S3_DIR/firmware.bin"
+
+          # Daemon binaries — merge-multiple flattened them into daemon-artifacts/.
+          cp daemon-artifacts/argus-daemon-windows.exe site/daemon/
+          cp daemon-artifacts/argus-daemon-macos      site/daemon/
+          cp daemon-artifacts/argus-daemon-linux      site/daemon/
+          chmod +x site/daemon/argus-daemon-macos site/daemon/argus-daemon-linux
+
+          VERSION="$(date -u +%-m.%-d).${GITHUB_SHA::7}"
+          echo "Version: $VERSION"
+
+          jq --arg v "$VERSION" '.version = $v' site/manifest.json > site/manifest.json.tmp
+          mv site/manifest.json.tmp site/manifest.json
+
+          echo "{\"build\":\"$VERSION\",\"sha\":\"${GITHUB_SHA::7}\",\"date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > site/version.json
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

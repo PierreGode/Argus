@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Argus — Web Flasher</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <script
+      type="module"
+      src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"
+    ></script>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #000000;
+        --panel: #1f1f1e;
+        --panel-2: #2a2a28;
+        --text: #faf9f5;
+        --dim: #b0aea5;
+        --ash: #6b6b66;
+        --accent: #d97757;
+        --accent-soft: rgba(217, 119, 87, 0.18);
+        --accent-line: rgba(217, 119, 87, 0.35);
+        --green: #788c5d;
+        --red: #c0392b;
+      }
+
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; }
+
+      body {
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--text);
+        font-family: "Inter", system-ui, sans-serif;
+        font-weight: 300;
+        line-height: 1.55;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+      }
+
+      /* subtle accent glow behind the hero */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: -20% 0 auto 0;
+        height: 60vh;
+        background: radial-gradient(
+          ellipse at center top,
+          rgba(217, 119, 87, 0.08) 0%,
+          transparent 60%
+        );
+        pointer-events: none;
+        z-index: 0;
+      }
+
+      .page {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        max-width: 640px;
+        padding: 4rem 1.5rem 4rem;
+      }
+
+      header.title {
+        text-align: center;
+        margin-bottom: 2.5rem;
+      }
+      .eyebrow {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.78rem;
+        letter-spacing: 0.4em;
+        color: var(--accent);
+        text-transform: uppercase;
+        margin-bottom: 0.85rem;
+      }
+      h1 {
+        font-weight: 600;
+        font-size: clamp(2.4rem, 6vw, 3.4rem);
+        letter-spacing: -0.02em;
+        margin: 0 0 0.75rem;
+        color: var(--text);
+      }
+      .tagline {
+        color: var(--dim);
+        font-size: 1.05rem;
+        max-width: 38ch;
+        margin: 0 auto;
+      }
+
+      /* install panel */
+      .panel {
+        background: var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.04);
+        border-radius: 12px;
+        padding: 2rem 1.75rem;
+        text-align: center;
+      }
+      .panel h2 {
+        font-weight: 500;
+        font-size: 1.05rem;
+        letter-spacing: 0.02em;
+        margin: 0 0 0.5rem;
+        color: var(--text);
+      }
+      .panel p {
+        margin: 0 0 1.5rem;
+        color: var(--dim);
+        font-size: 0.95rem;
+      }
+
+      .board-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.55rem;
+        margin-bottom: 1.5rem;
+        padding: 0.45rem 0.95rem;
+        background: var(--accent-soft);
+        border: 1px solid var(--accent-line);
+        border-radius: 999px;
+        font-size: 0.78rem;
+        letter-spacing: 0.05em;
+        color: var(--text);
+      }
+      .board-chip .dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        box-shadow: 0 0 8px var(--accent);
+      }
+
+      /* flash button — high-contrast terra-cotta */
+      button.flash {
+        font-family: "Inter", sans-serif;
+        font-weight: 500;
+        font-size: 0.95rem;
+        letter-spacing: 0.02em;
+        color: var(--bg);
+        background: var(--accent);
+        border: none;
+        padding: 0.9rem 2.2rem;
+        cursor: pointer;
+        border-radius: 8px;
+        transition: transform 0.15s ease, filter 0.2s ease, box-shadow 0.2s ease;
+        box-shadow: 0 8px 24px rgba(217, 119, 87, 0.18);
+      }
+      button.flash:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.08);
+        box-shadow: 0 12px 32px rgba(217, 119, 87, 0.28);
+      }
+      button.flash:active { transform: translateY(0); filter: brightness(0.95); }
+
+      button.flash-disabled {
+        font-family: "Inter", sans-serif;
+        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+        color: var(--red);
+        background: transparent;
+        border: 1px solid rgba(192, 57, 43, 0.5);
+        padding: 0.75rem 1.5rem;
+        cursor: not-allowed;
+        border-radius: 8px;
+      }
+
+      .hint {
+        margin: 1.5rem auto 0;
+        max-width: 44ch;
+        color: var(--dim);
+        font-size: 0.85rem;
+        line-height: 1.55;
+        text-align: center;
+      }
+      .hint strong { color: var(--text); font-weight: 500; }
+      .hint code {
+        font-family: "JetBrains Mono", monospace;
+        color: var(--accent);
+        background: var(--accent-soft);
+        padding: 0.1rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.78rem;
+      }
+
+      .browser-warn {
+        display: none;
+        margin-top: 1.25rem;
+        padding: 0.75rem 1rem;
+        background: rgba(192, 57, 43, 0.12);
+        border: 1px solid rgba(192, 57, 43, 0.4);
+        color: #f0a8a0;
+        font-size: 0.85rem;
+        text-align: center;
+        border-radius: 6px;
+      }
+
+      /* daemon download section */
+      .daemon-section {
+        margin-top: 1.5rem;
+      }
+      .daemon-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.6rem;
+        margin-top: 1rem;
+      }
+      a.dl {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.85rem 0.5rem;
+        background: var(--panel-2);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 8px;
+        color: var(--text);
+        font-size: 0.85rem;
+        font-weight: 500;
+        text-decoration: none;
+        transition: border-color 0.15s ease, transform 0.1s ease;
+      }
+      a.dl:hover {
+        border-color: var(--accent-line);
+        transform: translateY(-1px);
+      }
+      a.dl .os {
+        color: var(--accent);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 0.72rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      a.dl .name {
+        color: var(--dim);
+        font-size: 0.72rem;
+        font-family: "JetBrains Mono", monospace;
+        word-break: break-all;
+      }
+      @media (max-width: 480px) {
+        .daemon-grid { grid-template-columns: 1fr; }
+      }
+
+      /* footer */
+      footer {
+        margin-top: 2.5rem;
+        text-align: center;
+        font-size: 0.8rem;
+        color: var(--ash);
+        letter-spacing: 0.02em;
+      }
+      footer code {
+        font-family: "JetBrains Mono", monospace;
+        color: var(--dim);
+        background: rgba(255, 255, 255, 0.03);
+        padding: 0.1rem 0.4rem;
+        border-radius: 3px;
+        font-size: 0.75rem;
+      }
+      footer a { color: var(--accent); text-decoration: none; }
+      footer a:hover { text-decoration: underline; }
+      footer .row { margin: 0.4rem 0; }
+
+      /* splash hero — mirrors the firmware's sprite-driven mascot splash. */
+      .splash-hero {
+        display: flex;
+        justify-content: center;
+        margin: 0 auto 1.25rem;
+      }
+      .splash-stage {
+        position: relative;
+        width: 220px;
+        height: 220px;
+        border-radius: 14px;
+        background: var(--bg);
+        overflow: hidden;
+        box-shadow:
+          0 0 0 1px rgba(217, 119, 87, 0.18),
+          0 12px 40px rgba(217, 119, 87, 0.12);
+      }
+      .splash-stage img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        opacity: 0;
+        /* No floating animation — sprite stays statically centered. The
+           character "lives" by swapping expressions, cross-faded for a
+           gentle handoff. */
+        transition: opacity 0.45s ease-in-out;
+        will-change: opacity;
+      }
+      .splash-stage img.active { opacity: 1; }
+
+      @media (max-width: 480px) {
+        .page { padding-top: 2.5rem; }
+        h1 { font-size: 2rem; }
+        .panel { padding: 1.5rem 1.25rem; }
+        .splash-stage { width: 180px; height: 180px; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="splash-hero">
+        <div class="splash-stage" aria-label="Argus mascot — cycling expressions">
+          <img id="sprite-happy"     src="img/sprite_happy.png"     alt="Argus happy"     class="active">
+          <img id="sprite-looking"   src="img/sprite_looking.png"   alt="Argus looking">
+          <img id="sprite-flirt"     src="img/sprite_flirt.png"     alt="Argus flirt">
+          <img id="sprite-buffeld"   src="img/sprite_buffeld.png"   alt="Argus baffled">
+          <img id="sprite-surprised" src="img/sprite_surprised.png" alt="Argus surprised">
+          <img id="sprite-angry"     src="img/sprite_angry.png"     alt="Argus angry">
+        </div>
+      </div>
+
+      <header class="title">
+        <div class="eyebrow">ARGUS</div>
+        <h1>Claude Code, on your desk.</h1>
+        <p class="tagline">
+          A 480×480 ESP32-S3 dashboard that shows your Claude Code usage in real time.
+          Plug it in, flash it, point the daemon at it.
+        </p>
+      </header>
+
+      <section class="panel">
+        <h2>Flash your device</h2>
+        <p>Connect via USB-C, then click below. Your browser does the rest.</p>
+
+        <div class="board-chip">
+          <span class="dot" aria-hidden="true"></span>
+          Waveshare ESP32-S3-Touch-LCD-4B
+        </div>
+
+        <div>
+          <esp-web-install-button manifest="manifest.json">
+            <button class="flash" slot="activate">Flash Argus</button>
+            <button class="flash-disabled" slot="unsupported">
+              Use Chrome, Edge, or Opera — your browser lacks Web Serial
+            </button>
+            <button class="flash-disabled" slot="not-allowed">
+              Web Serial requires HTTPS
+            </button>
+          </esp-web-install-button>
+        </div>
+        <p></p>
+        <p class="hint">
+          <strong>Flash from UART. If flashing fails:</strong> hold <code>BOOT</code>, tap
+          <code>RESET</code>, release <code>BOOT</code>, then click Flash again
+          to force download mode.
+        </p>
+
+        <div id="browserWarn" class="browser-warn">
+          Web Serial is only supported by Chromium-based browsers (Chrome, Edge,
+          Opera) on desktop.
+        </div>
+      </section>
+
+      <section class="panel daemon-section">
+        <h2>Download the daemon</h2>
+        <p>
+          A small background process that reads your Claude Code credentials, polls
+          Anthropic for rate-limit headers, and pushes live usage to the device
+          over BLE (or USB-C — pass <code style="font-family:'JetBrains Mono',monospace;color:var(--accent);">--serial</code> to auto-detect the board).
+        </p>
+        <div class="daemon-grid">
+          <a class="dl" href="daemon/argus-daemon-windows.exe" download>
+            <span class="os">Windows</span>
+            <span class="name">argus-daemon.exe</span>
+          </a>
+          <a class="dl" href="daemon/argus-daemon-macos" download>
+            <span class="os">macOS</span>
+            <span class="name">argus-daemon</span>
+          </a>
+          <a class="dl" href="daemon/argus-daemon-linux" download>
+            <span class="os">Linux</span>
+            <span class="name">argus-daemon</span>
+          </a>
+        </div>
+        <p class="hint" style="margin-top:1.25rem;">
+          <strong>macOS / Linux:</strong> run <code>chmod +x argus-daemon</code> first.
+          On macOS, Gatekeeper may require right-click → Open the first time
+          (these builds are unsigned).
+        </p>
+      </section>
+
+      <footer>
+        <div class="row">Build <code id="build">—</code></div>
+        <div class="row" style="margin-top: 1rem;">
+          <a href="https://github.com/PierreGode/Argus">github.com/PierreGode/Argus</a>
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      if (!("serial" in navigator)) {
+        document.getElementById("browserWarn").style.display = "block";
+      }
+      fetch("version.json", { cache: "no-store" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((v) => {
+          if (v && v.build) document.getElementById("build").textContent = v.build;
+        })
+        .catch(() => {});
+
+      // ---- Splash sprite cycler (mirrors firmware src/splash.cpp) -------
+      // The mascot has four expressions packed as PNGs in /img. We cross-
+      // fade between them every few seconds; the bob + sway motion is
+      // pure CSS keyframes so the JS only needs to flip which image is
+      // marked .active.
+      (function runSpriteCycler() {
+        const sprites = [
+          document.getElementById("sprite-happy"),
+          document.getElementById("sprite-looking"),
+          document.getElementById("sprite-flirt"),
+          document.getElementById("sprite-buffeld"),
+          document.getElementById("sprite-surprised"),
+          document.getElementById("sprite-angry"),
+        ].filter(Boolean);
+        if (sprites.length === 0) return;
+
+        let i = 0;
+        function tick() {
+          sprites.forEach((s, idx) => s.classList.toggle("active", idx === i));
+          // Weight the loop toward "happy" since that's the resting face;
+          // visit other expressions occasionally for variety.
+          i = (i + 1) % sprites.length;
+          // Slightly randomised interval so two open tabs don't pulse in lockstep.
+          const next = 3500 + Math.random() * 1500;
+          setTimeout(tick, next);
+        }
+        // First flip after a beat so the initial render is visible.
+        setTimeout(tick, 2500);
+      })();
+    </script>
+  </body>
+</html>

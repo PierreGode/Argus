@@ -1,0 +1,87 @@
+name: Build Daemon EXE
+
+on:
+  push:
+    paths:
+      - "daemon/argus-daemon.py"
+      - "daemon/requirements.txt"
+      - ".github/workflows/build-daemon.yml"
+  pull_request:
+    paths:
+      - "daemon/argus-daemon.py"
+      - "daemon/requirements.txt"
+      - ".github/workflows/build-daemon.yml"
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: daemon/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r daemon/requirements.txt
+
+      - name: Build EXE with PyInstaller
+        run: |
+          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-daemon-windows
+          path: dist/argus-daemon.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: daemon/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r daemon/requirements.txt
+
+      - name: Build binary with PyInstaller
+        run: |
+          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-daemon-macos
+          path: dist/argus-daemon
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: daemon/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r daemon/requirements.txt
+
+      - name: Build binary with PyInstaller
+        run: |
+          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: argus-daemon-linux
+          path: dist/argus-daemon
