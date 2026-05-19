@@ -105,6 +105,7 @@ def poll_usage(token: str) -> dict:
 
     # Try unified headers first (Claude Code Max subscriptions)
     s5h_util = h.get("anthropic-ratelimit-unified-5h-utilization")
+    tok_limit_hdr = h.get("anthropic-ratelimit-tokens-limit")
     if s5h_util is not None:
         # Unified rate limits (subscription-based)
         s5h_util  = float(s5h_util)
@@ -116,18 +117,18 @@ def poll_usage(token: str) -> dict:
         sr = max(0, int((s5h_reset - now) / 60))
         wp = int(s7d_util * 100)
         wr = max(0, int((s7d_reset - now) / 60))
-    else:
+    elif tok_limit_hdr is not None:
         # Standard rate limits (API key based) — show token usage percentage
-        tok_limit = int(h.get("anthropic-ratelimit-tokens-limit", "1"))
+        tok_limit = int(tok_limit_hdr)
         tok_remain = int(h.get("anthropic-ratelimit-tokens-remaining", "0"))
         req_limit = int(h.get("anthropic-ratelimit-requests-limit", "1"))
         req_remain = int(h.get("anthropic-ratelimit-requests-remaining", "0"))
         tok_reset_str = h.get("anthropic-ratelimit-tokens-reset", "")
-        
+
         # Calculate usage percentage
         tok_used_pct = int(((tok_limit - tok_remain) / max(tok_limit, 1)) * 100)
         req_used_pct = int(((req_limit - req_remain) / max(req_limit, 1)) * 100)
-        
+
         # Parse reset time
         sr = 0
         if tok_reset_str:
@@ -137,12 +138,23 @@ def poll_usage(token: str) -> dict:
                 sr = max(0, int((reset_dt.timestamp() - now) / 60))
             except Exception:
                 pass
-        
+
         sp = max(tok_used_pct, req_used_pct)
         wp = sp  # No weekly data for standard API
         wr = 0
         status = "active"
         log(f"Tokens: {tok_remain}/{tok_limit}, Requests: {req_remain}/{req_limit}")
+    else:
+        # No rate-limit headers at all — typically means no Claude Code session
+        # has been started in the current 5-hour window (Anthropic only emits
+        # unified headers once a session is active). Report 0% instead of
+        # computing a bogus 100% from defaulted-to-zero remaining/limit values.
+        sp = 0
+        sr = 0
+        wp = 0
+        wr = 0
+        status = "idle"
+        log("No rate-limit headers in response — reporting 0% (no active session)")
 
     return {
         "s": sp, "sr": sr,
