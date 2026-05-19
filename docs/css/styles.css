@@ -1,0 +1,299 @@
+:root {
+  color-scheme: dark;
+  --bg: #000000;
+  --panel: #1f1f1e;
+  --panel-2: #2a2a28;
+  --text: #faf9f5;
+  --dim: #b0aea5;
+  --ash: #6b6b66;
+  --accent: #d97757;
+  --accent-soft: rgba(217, 119, 87, 0.18);
+  --accent-line: rgba(217, 119, 87, 0.35);
+  --green: #788c5d;
+  --red: #c0392b;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", system-ui, sans-serif;
+  font-weight: 300;
+  line-height: 1.55;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* subtle accent glow behind the hero */
+body::before {
+  content: "";
+  position: fixed;
+  inset: -20% 0 auto 0;
+  height: 60vh;
+  background: radial-gradient(
+    ellipse at center top,
+    rgba(217, 119, 87, 0.08) 0%,
+    transparent 60%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+.page {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 640px;
+  padding: 4rem 1.5rem 4rem;
+}
+
+header.title {
+  text-align: center;
+  margin-bottom: 2.5rem;
+}
+.eyebrow {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.78rem;
+  letter-spacing: 0.4em;
+  color: var(--accent);
+  text-transform: uppercase;
+  margin-bottom: 0.85rem;
+}
+h1 {
+  font-weight: 600;
+  font-size: clamp(2.4rem, 6vw, 3.4rem);
+  letter-spacing: -0.02em;
+  margin: 0 0 0.75rem;
+  color: var(--text);
+}
+.tagline {
+  color: var(--dim);
+  font-size: 1.05rem;
+  max-width: 38ch;
+  margin: 0 auto;
+}
+
+/* install panel */
+.panel {
+  background: var(--panel);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  padding: 2rem 1.75rem;
+  text-align: center;
+}
+.panel h2 {
+  font-weight: 500;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.5rem;
+  color: var(--text);
+}
+.panel p {
+  margin: 0 0 1.5rem;
+  color: var(--dim);
+  font-size: 0.95rem;
+}
+
+.board-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 1.5rem;
+  padding: 0.45rem 0.95rem;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  font-size: 0.78rem;
+  letter-spacing: 0.05em;
+  color: var(--text);
+}
+.board-chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+/* flash button — high-contrast terra-cotta */
+button.flash {
+  font-family: "Inter", sans-serif;
+  font-weight: 500;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  color: var(--bg);
+  background: var(--accent);
+  border: none;
+  padding: 0.9rem 2.2rem;
+  cursor: pointer;
+  border-radius: 8px;
+  transition: transform 0.15s ease, filter 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 8px 24px rgba(217, 119, 87, 0.18);
+}
+button.flash:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+  box-shadow: 0 12px 32px rgba(217, 119, 87, 0.28);
+}
+button.flash:active { transform: translateY(0); filter: brightness(0.95); }
+
+button.flash-disabled {
+  font-family: "Inter", sans-serif;
+  font-size: 0.85rem;
+  letter-spacing: 0.05em;
+  color: var(--red);
+  background: transparent;
+  border: 1px solid rgba(192, 57, 43, 0.5);
+  padding: 0.75rem 1.5rem;
+  cursor: not-allowed;
+  border-radius: 8px;
+}
+
+.hint {
+  margin: 1.5rem auto 0;
+  max-width: 44ch;
+  color: var(--dim);
+  font-size: 0.85rem;
+  line-height: 1.55;
+  text-align: center;
+}
+.hint strong { color: var(--text); font-weight: 500; }
+.hint code {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.78rem;
+}
+
+.browser-warn {
+  display: none;
+  margin-top: 1.25rem;
+  padding: 0.75rem 1rem;
+  background: rgba(192, 57, 43, 0.12);
+  border: 1px solid rgba(192, 57, 43, 0.4);
+  color: #f0a8a0;
+  font-size: 0.85rem;
+  text-align: center;
+  border-radius: 6px;
+}
+
+/* daemon download section */
+.daemon-section {
+  margin-top: 1.5rem;
+}
+.daemon-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+a.dl {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.85rem 0.5rem;
+  background: var(--panel-2);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}
+a.dl:hover {
+  border-color: var(--accent-line);
+  transform: translateY(-1px);
+}
+a.dl .os {
+  color: var(--accent);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+a.dl .name {
+  color: var(--dim);
+  font-size: 0.72rem;
+  font-family: "JetBrains Mono", monospace;
+  word-break: break-all;
+}
+@media (max-width: 480px) {
+  .daemon-grid { grid-template-columns: 1fr; }
+}
+
+/* daemon-section inline code style (was inline in HTML) */
+.daemon-section code.cli {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--accent);
+}
+
+/* footer */
+footer {
+  margin-top: 2.5rem;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--ash);
+  letter-spacing: 0.02em;
+}
+footer code {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--dim);
+  background: rgba(255, 255, 255, 0.03);
+  padding: 0.1rem 0.4rem;
+  border-radius: 3px;
+  font-size: 0.75rem;
+}
+footer a { color: var(--accent); text-decoration: none; }
+footer a:hover { text-decoration: underline; }
+footer .row { margin: 0.4rem 0; }
+footer .row-spaced { margin-top: 1rem; }
+
+/* splash hero — mirrors the firmware's sprite-driven mascot splash. */
+.splash-hero {
+  display: flex;
+  justify-content: center;
+  margin: 0 auto 1.25rem;
+}
+.splash-stage {
+  position: relative;
+  width: 220px;
+  height: 220px;
+  border-radius: 14px;
+  background: var(--bg);
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(217, 119, 87, 0.18),
+    0 12px 40px rgba(217, 119, 87, 0.12);
+}
+.splash-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  /* No floating animation — sprite stays statically centered. The
+     character "lives" by swapping expressions, cross-faded for a
+     gentle handoff. */
+  transition: opacity 0.45s ease-in-out;
+  will-change: opacity;
+}
+.splash-stage img.active { opacity: 1; }
+
+/* hint variant used by the daemon-section */
+.hint-spaced { margin-top: 1.25rem; }
+
+@media (max-width: 480px) {
+  .page { padding-top: 2.5rem; }
+  h1 { font-size: 2rem; }
+  .panel { padding: 1.5rem 1.25rem; }
+  .splash-stage { width: 180px; height: 180px; }
+}
