@@ -61,15 +61,26 @@ def read_token() -> str:
         raise ValueError("No accessToken in credentials file")
     return token
 
+# Last successful rate-limit reading. Reused when the API returns a non-2xx
+# response (typically 401 after an OAuth token expires, or transient 5xx) so the
+# device keeps showing the last known utilisation instead of flapping to 0%
+# every poll. Keys mirror the wire shape returned by poll_usage().
+_last_usage_cache: dict | None = None
+
+
 def poll_usage(token: str) -> dict:
     """Make a minimal API call and extract rate-limit headers.
 
     Returns the rate-limit fields as a dict so callers can merge other data
     (e.g. today's local-log stats) before serializing.
 
-    Headers are returned even on error responses (400/401/429),
-    so this works even without API credits.
+    Anthropic emits rate-limit headers even on some error responses (e.g. 429),
+    but NOT on 401 — so we have to distinguish "no headers because the request
+    was rejected" from "no headers because no session has started in this 5h
+    window". The former reuses the cached last-good values; the latter reports
+    0%.
     """
+    global _last_usage_cache
     url = "https://api.anthropic.com/v1/messages"
     # Use Bearer auth for OAuth tokens, x-api-key for legacy API keys
     if token.startswith("sk-ant-oat"):
@@ -144,23 +155,43 @@ def poll_usage(token: str) -> dict:
         wr = 0
         status = "active"
         log(f"Tokens: {tok_remain}/{tok_limit}, Requests: {req_remain}/{req_limit}")
+    elif resp.status_code in (401, 403):
+        # Auth failed — token expired/revoked. Don't pretend the user is at 0%;
+        # serve the last known good values so the panels don't flap. Log
+        # loudly because this is something only the user can fix.
+        log(
+            f"Auth failed (HTTP {resp.status_code}) — Claude Code OAuth token "
+            f"likely expired. Run `claude /login` to refresh it."
+        )
+        if _last_usage_cache is not None:
+            return dict(_last_usage_cache)
+        sp = sr = wp = wr = 0
+        status = "auth-error"
+    elif resp.status_code >= 500 or resp.status_code == 429:
+        # Transient API issue — reuse cache so the device doesn't blink to 0%
+        # during a brief Anthropic outage / rate-limit on the meta endpoint.
+        log(f"API status {resp.status_code} with no rate-limit headers — reusing last good values")
+        if _last_usage_cache is not None:
+            return dict(_last_usage_cache)
+        sp = sr = wp = wr = 0
+        status = "unavailable"
     else:
-        # No rate-limit headers at all — typically means no Claude Code session
-        # has been started in the current 5-hour window (Anthropic only emits
-        # unified headers once a session is active). Report 0% instead of
-        # computing a bogus 100% from defaulted-to-zero remaining/limit values.
-        sp = 0
-        sr = 0
-        wp = 0
-        wr = 0
+        # 2xx with no rate-limit headers — genuine "no session started yet" in
+        # the current 5h window. Reporting 0% is the right answer here.
+        sp = sr = wp = wr = 0
         status = "idle"
         log("No rate-limit headers in response — reporting 0% (no active session)")
 
-    return {
+    result = {
         "s": sp, "sr": sr,
         "w": wp, "wr": wr,
         "st": status, "ok": True,
     }
+    # Only cache successful reads with real header data — never cache the
+    # zero-fallback paths, otherwise a startup glitch would freeze 0% forever.
+    if status not in ("auth-error", "unavailable", "idle"):
+        _last_usage_cache = dict(result)
+    return result
 
 
 def demo_payload() -> str:
