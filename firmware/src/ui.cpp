@@ -702,11 +702,11 @@ void ui_update(const UsageData* data) {
         }
         if (data->copilot_editor[0]) {
             off += snprintf(strip + off, sizeof(strip) - off, "%s%s",
-                            off ? "  ·  " : "", data->copilot_editor);
+                            off ? "  |  " : "", data->copilot_editor);
         }
         if (data->copilot_when[0]) {
             off += snprintf(strip + off, sizeof(strip) - off, "%s%s",
-                            off ? "  ·  " : "", data->copilot_when);
+                            off ? "  |  " : "", data->copilot_when);
         }
         lv_label_set_text(lbl_cp_strip, strip);
         lv_label_set_text(lbl_cp_hint,  "");
