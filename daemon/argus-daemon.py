@@ -76,6 +76,121 @@ def read_token() -> str:
 # fails transiently.
 _last_token_seen: str | None = None
 
+# Claude Code's public OAuth client. These let the daemon refresh an expired
+# access token itself (using the refresh token already in .credentials.json)
+# when Claude Code isn't running to do it. Verified against the documented
+# Claude Code OAuth flow; if Anthropic ever changes them, refresh just fails
+# safe (we fall back to the on-disk token, same as before this feature).
+OAUTH_TOKEN_URL    = "https://console.anthropic.com/v1/oauth/token"
+OAUTH_CLIENT_ID    = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+# Only refresh inside this margin before expiry, so we rarely race with Claude
+# Code's own refresh (refresh tokens rotate on use).
+REFRESH_MARGIN_SEC = 300
+_refresh_lock = threading.Lock()
+
+
+def _credentials_path() -> Path:
+    return Path.home() / ".claude" / ".credentials.json"
+
+
+def _write_credentials(new_oauth: dict) -> bool:
+    """Atomically merge the refreshed token fields back into .credentials.json,
+    preserving every other key (and file permissions). Returns True on success.
+    """
+    path = _credentials_path()
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception as e:
+        log(f"Credentials write skipped (re-read failed: {e})")
+        return False
+
+    if isinstance(data.get("claudeAiOauth"), dict):
+        data["claudeAiOauth"].update({
+            "accessToken":  new_oauth["accessToken"],
+            "refreshToken": new_oauth["refreshToken"],
+            "expiresAt":    new_oauth["expiresAt"],
+        })
+    else:  # legacy flat format
+        data["accessToken"] = new_oauth["accessToken"]
+
+    tmp = path.with_suffix(path.suffix + ".argus-tmp")
+    try:
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=2)
+        try:  # keep 0600 perms on POSIX; no-op effect on Windows
+            os.chmod(tmp, os.stat(path).st_mode)
+        except OSError:
+            pass
+        os.replace(tmp, path)  # atomic on same filesystem
+        return True
+    except Exception as e:
+        log(f"Credentials write failed: {e}")
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return False
+
+
+def _maybe_refresh_token(oauth: dict) -> dict:
+    """If the access token is within REFRESH_MARGIN_SEC of expiry (or already
+    expired) and a refresh token is present, exchange it for a fresh one and
+    persist it. Returns the (possibly updated) oauth dict; on any failure logs
+    and returns the input unchanged so the caller still has a token to try.
+    """
+    exp = oauth.get("expiresAt")
+    rt = oauth.get("refreshToken")
+    if not rt or not isinstance(exp, (int, float)):
+        return oauth
+    if int(exp / 1000 - time.time()) > REFRESH_MARGIN_SEC:
+        return oauth
+
+    with _refresh_lock:
+        # Another thread (or Claude Code) may have refreshed while we waited on
+        # the lock — re-read and bail if the on-disk token is now fresh.
+        try:
+            fresh = read_credentials()
+            fexp = fresh.get("expiresAt")
+            if isinstance(fexp, (int, float)) and \
+               int(fexp / 1000 - time.time()) > REFRESH_MARGIN_SEC:
+                return fresh
+            rt = fresh.get("refreshToken", rt)
+        except Exception:
+            pass
+
+        log("OAuth token near expiry — refreshing via refresh_token")
+        try:
+            resp = httpx.post(
+                OAUTH_TOKEN_URL,
+                headers={"Content-Type": "application/json",
+                         "User-Agent": "anthropic"},
+                json={"grant_type": "refresh_token",
+                      "refresh_token": rt,
+                      "client_id": OAUTH_CLIENT_ID},
+                timeout=30,
+            )
+        except httpx.HTTPError as e:
+            log(f"Token refresh request failed: {e} — keeping current token")
+            return oauth
+        if resp.status_code != 200:
+            log(f"Token refresh rejected (HTTP {resp.status_code}) — keeping current token")
+            return oauth
+        try:
+            d = resp.json()
+            new_oauth = dict(oauth)
+            new_oauth["accessToken"]  = d["access_token"]
+            new_oauth["refreshToken"] = d.get("refresh_token", rt)
+            new_oauth["expiresAt"]    = int(time.time() * 1000) + int(d["expires_in"]) * 1000
+        except Exception as e:
+            log(f"Token refresh parse failed: {e} — keeping current token")
+            return oauth
+
+        if _write_credentials(new_oauth):
+            log(f"OAuth token refreshed — valid for ~{int(d['expires_in']) // 3600}h")
+            return new_oauth
+        return oauth
+
 
 def current_token(fallback: str | None = None) -> str:
     """Re-read the OAuth access token from disk on EVERY poll.
@@ -95,6 +210,9 @@ def current_token(fallback: str | None = None) -> str:
     except Exception as e:
         log(f"Token re-read failed ({e}) — reusing last known token")
         return fallback or _last_token_seen or ""
+
+    # Refresh ourselves if the token is about to expire and Claude Code hasn't.
+    oauth = _maybe_refresh_token(oauth)
 
     tok = oauth.get("accessToken", "")
     exp = oauth.get("expiresAt")
