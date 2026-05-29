@@ -44,22 +44,73 @@ def log(msg: str):
     except Exception:
         pass
 
-def read_token() -> str:
-    """Read OAuth token from ~/.claude/.credentials.json"""
+def read_credentials() -> dict:
+    """Read the OAuth block from ~/.claude/.credentials.json.
+
+    Returns the dict that holds at least 'accessToken' (and usually
+    'refreshToken'/'expiresAt' for subscription OAuth tokens). Raises if the
+    file is missing or has no usable token.
+    """
     cred_path = Path.home() / ".claude" / ".credentials.json"
     if not cred_path.exists():
         raise FileNotFoundError(f"Credentials not found at {cred_path}")
     with open(cred_path) as f:
         data = json.load(f)
-    # Try OAuth token first (claudeAiOauth.accessToken)
+    # Subscription OAuth format (claudeAiOauth.accessToken + expiresAt).
     oauth = data.get("claudeAiOauth", {})
     if isinstance(oauth, dict) and oauth.get("accessToken"):
-        return oauth["accessToken"]
-    # Fallback to legacy format
-    token = data.get("accessToken", "")
-    if not token:
-        raise ValueError("No accessToken in credentials file")
-    return token
+        return oauth
+    # Legacy flat format.
+    if data.get("accessToken"):
+        return {"accessToken": data["accessToken"]}
+    raise ValueError("No accessToken in credentials file")
+
+
+def read_token() -> str:
+    """Read just the OAuth access token (used once at startup for validation)."""
+    return read_credentials()["accessToken"]
+
+
+# Last access token we handed to poll_usage(). Tracked so we can log (once) when
+# Claude Code rotates the on-disk token, and fall back to it if a later disk read
+# fails transiently.
+_last_token_seen: str | None = None
+
+
+def current_token(fallback: str | None = None) -> str:
+    """Re-read the OAuth access token from disk on EVERY poll.
+
+    Claude Code rewrites ~/.claude/.credentials.json with a fresh access token
+    roughly every ~8h (the old one expires). The daemon used to capture the
+    token once at startup and reuse that stale string forever, so after ~8h the
+    API stopped returning real rate-limit headers and the device showed 0% until
+    a manual restart. Re-reading here means a refresh by Claude Code is picked up
+    automatically on the next poll — no restart needed.
+
+    `fallback` (the startup token) is returned only if the disk read fails.
+    """
+    global _last_token_seen
+    try:
+        oauth = read_credentials()
+    except Exception as e:
+        log(f"Token re-read failed ({e}) — reusing last known token")
+        return fallback or _last_token_seen or ""
+
+    tok = oauth.get("accessToken", "")
+    exp = oauth.get("expiresAt")
+    if isinstance(exp, (int, float)):
+        secs = int(exp / 1000 - time.time())
+        if secs < 0:
+            log(f"On-disk OAuth token expired {-secs // 60}m ago — "
+                f"run Claude Code to refresh it")
+        elif secs < 600:
+            log(f"OAuth token expires in {secs // 60}m {secs % 60}s")
+
+    if tok and tok != _last_token_seen:
+        if _last_token_seen is not None:
+            log("Picked up refreshed OAuth token from disk")
+        _last_token_seen = tok
+    return tok or fallback or _last_token_seen or ""
 
 # Last successful rate-limit reading. Reused when the API returns a non-2xx
 # response (typically 401 after an OAuth token expires, or transient 5xx) so the
@@ -535,7 +586,11 @@ def build_payload(api_token: str) -> str:
     tray UI's edits apply at the next poll without a restart."""
     cfg = tray_ui.load_config()
 
-    fields = poll_usage(api_token)
+    # Re-read the token from disk every poll so a refresh by Claude Code is
+    # picked up without restarting the daemon (api_token is the startup token,
+    # used only as a fallback if the disk read fails).
+    token = current_token(fallback=api_token)
+    fields = poll_usage(token)
     try:
         today = today_payload_fields(aggregate_today_stats())
         fields.update(today)
