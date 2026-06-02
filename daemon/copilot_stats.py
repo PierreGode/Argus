@@ -1,16 +1,16 @@
-"""Fetch GitHub Copilot status + premium-request usage for the desk display.
+"""Fetch GitHub Copilot status + org AI-credit usage for the desk display.
 
 Two independent reads, both authenticated with the user's existing PAT:
 
-  1. fetch_seat(token, org, login=None)
-        GET /orgs/{org}/members/{login}/copilot
-        Returns seat status + last activity + editor.
+  1. fetch(token, org, login=None)
+      GET /orgs/{org}/members/{login}/copilot
+      Returns seat status + last activity + editor.
 
-  2. fetch_premium_usage(token, enterprise, login, allowance)
-        GET /enterprises/{enterprise}/settings/billing/premium_request/usage
-            ?user={login}
-        Returns this month's premium-request usage, broken down per
-        model, plus a percentage against the plan's monthly allowance.
+  2. fetch_premium_usage(token, org, allowance)
+      GET /organizations/{org}/settings/billing/usage/summary
+      GET /organizations/{org}/settings/billing/premium_request/usage
+      Returns this month's included AI-credit consumption, any billed
+      overage, and the top model contributing to Copilot usage.
 
 Both surface a single "no data" object on failure (404 / 403 / missing
 config) rather than raising, so the daemon can call them on every poll
@@ -18,12 +18,9 @@ and the device degrades gracefully when only one of the two endpoints
 is reachable.
 
 Permissions needed on the PAT:
-    - `read:org` for fetch_seat (issued by an admin of the target org).
-    - Enterprise billing read for fetch_premium_usage. That endpoint is
-      enterprise-scoped, so a regular Copilot Business org without an
-      enclosing enterprise won't have it — `fetch_premium_usage` returns
-      a disabled result in that case and the device just hides the
-      premium-request panel.
+    - `read:org` for fetch (issued by an admin of the target org).
+    - Billing/administration read on the organization for
+    fetch_premium_usage.
 """
 
 from __future__ import annotations
@@ -35,6 +32,7 @@ from datetime import datetime, timezone
 import httpx
 
 API = "https://api.github.com"
+API_VERSION = "2026-03-10"
 
 
 class CopilotError(RuntimeError):
@@ -45,7 +43,7 @@ def _headers(token: str) -> dict:
     return {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
+        "X-GitHub-Api-Version": API_VERSION,
     }
 
 
@@ -181,119 +179,210 @@ def fetch(token: str, org: str, login: str | None = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Premium-request usage (enterprise billing endpoint)
+# Org AI-credit usage (enhanced billing endpoints)
 # ---------------------------------------------------------------------------
 
-# Per-plan monthly premium-request allowance as documented by GitHub. The
-# tray UI lets the user pick which plan they're on; we fall back to the
-# Copilot Enterprise default since that's the typical case for orgs that
-# even expose this endpoint.
-ALLOWANCE_BY_PLAN = {
-    "business":   300,
-    "enterprise": 1000,
-    "pro":        300,
-    "pro_plus":   1500,
-}
+# GitHub's current promotional org-level included pool for a single
+# Copilot Business seat. The tray lets the user override this with the
+# actual pooled value for their billing entity.
+DEFAULT_INCLUDED_AI_CREDITS = 3000
 
-# SKU filter — the endpoint returns rows for several SKUs (Cloud Agent,
-# Premium Request, etc.). We only want the row labelled as a premium
-# request when computing the percentage.
+# SKU filter — the premium-request report still carries the useful model
+# breakdown even after the UI moved to AI-credit terminology.
 _PREMIUM_SKU = "Copilot Premium Request"
+
+
+def _as_float(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _copilot_rows(items: list[dict]) -> list[dict]:
+    rows = []
+    for item in items:
+        product = (item.get("product") or "").lower()
+        sku = (item.get("sku") or "").lower()
+        if "copilot" in product or "copilot" in sku:
+            rows.append(item)
+    return rows
+
+
+def _looks_like_credit_row(item: dict) -> bool:
+    unit = (item.get("unitType") or "").lower()
+    sku = (item.get("sku") or "").lower()
+    return "credit" in unit or "credit" in sku or "ai" in sku
+
+
+def _select_ai_credit_rows(items: list[dict]) -> list[dict]:
+    copilot = _copilot_rows(items)
+    if not copilot:
+        return []
+
+    explicit = [item for item in copilot if _looks_like_credit_row(item)]
+    if explicit:
+        return explicit
+
+    metered = []
+    for item in copilot:
+        unit = (item.get("unitType") or "").lower()
+        sku = (item.get("sku") or "").lower()
+        if unit in {"seat", "seats", "license", "licenses", "month", "months"}:
+            continue
+        if "license" in sku:
+            continue
+        metered.append(item)
+    return metered or copilot
+
+
+def _billing_base_path(scope: str, slug: str) -> str:
+    if scope == "enterprise":
+        return f"{API}/enterprises/{slug}/settings/billing"
+    return f"{API}/organizations/{slug}/settings/billing"
+
+
+def _fetch_top_model_usage(
+    token: str,
+    scope: str,
+    slug: str,
+) -> tuple[str, float, list[tuple[str, float]]]:
+    try:
+        resp = httpx.get(
+            f"{_billing_base_path(scope, slug)}/premium_request/usage",
+            headers=_headers(token),
+            timeout=15,
+        )
+    except httpx.HTTPError as e:
+        print(f"[copilot_stats] premium breakdown network error: {e}", flush=True)
+        return "", 0.0, []
+
+    if resp.status_code in (401, 403):
+        print(
+            f"[copilot_stats] premium breakdown {resp.status_code}: "
+            f"{resp.json().get('message', '')}",
+            flush=True,
+        )
+        return "", 0.0, []
+    if resp.status_code == 404:
+        return "", 0.0, []
+    if resp.status_code >= 400:
+        print(
+            f"[copilot_stats] premium breakdown http {resp.status_code}: "
+            f"{resp.text[:120]}",
+            flush=True,
+        )
+        return "", 0.0, []
+
+    per_model: dict[str, float] = defaultdict(float)
+    for item in resp.json().get("usageItems", []) or []:
+        if item.get("sku") != _PREMIUM_SKU:
+            continue
+        model = item.get("model") or "Unknown"
+        amount = _as_float(item.get("grossAmount"))
+        if amount <= 0.0:
+            amount = _as_float(item.get("grossQuantity"))
+        per_model[model] += amount
+
+    models_sorted = sorted(per_model.items(), key=lambda row: -row[1])
+    top_model, top_value = (models_sorted[0] if models_sorted else ("", 0.0))
+    return top_model, top_value, models_sorted
 
 
 def fetch_premium_usage(
     token: str,
-    enterprise: str,
-    login: str | None = None,
+    account_slug: str,
     allowance: int | None = None,
+    scope: str = "org",
 ) -> dict:
-    """Return this month's premium-request usage for `login` inside
-    `enterprise`. Shape:
+    """Return this month's Copilot AI-credit usage for an org or enterprise.
+
+    The function keeps the historical name because the rest of the daemon
+    already keys off the flat `cpr/cpp/cpu/cpa/cpm` payload fields.
+
+    Shape:
 
         {
           "available": True,
-          "user":      "PierreGode",
+          "account":   "my-org-or-enterprise",
+          "scope":     "org",
           "year":      2026,
-          "month":     5,
-          "used":      604.0,
-          "allowance": 1000,
-          "pct":       60.4,
+          "month":     6,
+          "used":      126.0,
+          "allowance": 3000,
+          "pct":       4.2,
           "overage":   0.0,
           "cost":      0.0,
-          "top_model": "Claude Opus 4.6",
-          "top_count": 603.0,
-          "models":    [(name, count), ...]  # sorted desc
+          "top_model": "GPT-5.4",
+          "top_count": 1.26,
+          "models":    [(name, score), ...]  # sorted desc
         }
 
-    On missing config / 404 / 403 / network error, returns
-    `{"available": False}` so the daemon can include the field
-    unconditionally and the device just hides the panel. The error is
-    logged via print() so the tray's LIVE LOG surfaces it."""
-    if not token or not enterprise:
+    `used` represents included AI credits consumed from the pool. When the
+    summary response does not expose `discountQuantity`, we fall back to the
+    total metered quantity, capped to the configured allowance if one exists.
+    `overage` is the billed quantity above the included pool.
+    """
+    if not token or not account_slug:
         return {"available": False}
 
-    if not login:
-        try:
-            login = _get_login(token)
-        except CopilotError as e:
-            print(f"[copilot_stats] premium: {e}", flush=True)
-            return {"available": False}
+    scope = "enterprise" if scope == "enterprise" else "org"
 
     try:
         resp = httpx.get(
-            f"{API}/enterprises/{enterprise}/settings/billing/premium_request/usage",
+            f"{_billing_base_path(scope, account_slug)}/usage/summary",
             headers=_headers(token),
-            params={"user": login},
+            params={"product": "Copilot"},
             timeout=15,
         )
     except httpx.HTTPError as e:
-        print(f"[copilot_stats] premium network error: {e}", flush=True)
+        print(f"[copilot_stats] AI usage network error: {e}", flush=True)
         return {"available": False}
 
     if resp.status_code == 404:
-        # Enterprise name wrong, or the enterprise doesn't expose premium
-        # billing yet. Quiet: this is the "Copilot Business org with no
-        # enclosing enterprise" case.
+        # Slug wrong, or the billing entity is not on the enhanced billing platform.
         return {"available": False}
     if resp.status_code in (401, 403):
-        print(f"[copilot_stats] premium {resp.status_code}: "
+        print(f"[copilot_stats] AI usage {resp.status_code}: "
               f"{resp.json().get('message','')}", flush=True)
         return {"available": False}
     if resp.status_code >= 400:
-        print(f"[copilot_stats] premium http {resp.status_code}: "
+        print(f"[copilot_stats] AI usage http {resp.status_code}: "
               f"{resp.text[:120]}", flush=True)
         return {"available": False}
 
     body = resp.json()
     period = body.get("timePeriod", {}) or {}
-    items = body.get("usageItems", []) or []
+    items = _select_ai_credit_rows(body.get("usageItems", []) or [])
+    if not items:
+        return {"available": False}
 
-    # Filter to Premium Request SKU and aggregate per-model.
-    premium = [i for i in items if i.get("sku") == _PREMIUM_SKU]
-    per_model: dict[str, float] = defaultdict(float)
-    for i in premium:
-        per_model[i.get("model") or "Unknown"] += float(i.get("grossQuantity") or 0)
-
-    gross_total = sum(float(i.get("grossQuantity") or 0) for i in premium)
-    net_total   = sum(float(i.get("netQuantity")   or 0) for i in premium)
-    net_cost    = sum(float(i.get("netAmount")     or 0) for i in premium)
+    gross_total = sum(_as_float(i.get("grossQuantity") or i.get("quantity")) for i in items)
+    included_total = sum(_as_float(i.get("discountQuantity")) for i in items)
+    overage_total = sum(_as_float(i.get("netQuantity")) for i in items)
+    net_cost = sum(_as_float(i.get("netAmount")) for i in items)
 
     if not allowance or allowance <= 0:
-        allowance = ALLOWANCE_BY_PLAN["enterprise"]
-    pct = (gross_total / allowance) * 100.0 if allowance else 0.0
+        allowance = DEFAULT_INCLUDED_AI_CREDITS
 
-    models_sorted = sorted(per_model.items(), key=lambda x: -x[1])
-    top_model, top_count = (models_sorted[0] if models_sorted else ("", 0.0))
+    if included_total <= 0.0 and gross_total > 0.0:
+        included_total = min(gross_total, float(allowance)) if allowance else gross_total
+        overage_total = max(overage_total, gross_total - included_total)
+
+    pct = (included_total / allowance) * 100.0 if allowance else 0.0
+
+    top_model, top_count, models_sorted = _fetch_top_model_usage(token, scope, account_slug)
 
     return {
         "available": True,
-        "user":      body.get("user") or login,
+        "account": body.get("organization") or body.get("enterprise") or account_slug,
+        "scope": scope,
         "year":      int(period.get("year")  or 0),
         "month":     int(period.get("month") or 0),
-        "used":      gross_total,
+        "used":      included_total,
         "allowance": int(allowance),
         "pct":       pct,
-        "overage":   net_total,
+        "overage":   overage_total,
         "cost":      net_cost,
         "top_model": top_model,
         "top_count": top_count,
@@ -310,3 +399,4 @@ if __name__ == "__main__":
         print("set GH_TOKEN and GH_ORG to test", file=sys.stderr)
         sys.exit(2)
     print(json.dumps(fetch(tok, org), indent=2))
+    print(json.dumps(fetch_premium_usage(tok, org), indent=2))

@@ -123,13 +123,14 @@ static bool parse_json(const char* json, UsageData* out) {
     strlcpy(out->copilot_when,   doc["cpw"] | "",    sizeof(out->copilot_when));
     strlcpy(out->copilot_editor, doc["cpe"] | "",    sizeof(out->copilot_editor));
 
-    // Premium-request usage. Set only when the daemon got a 200 from the
-    // enterprise billing endpoint. cpu/cpa are integers on the wire; cpp
-    // is a 0.1-resolution percent (matches the example script's output).
+    // AI-credit usage. Set only when the daemon got a 200 from the org
+    // billing endpoint. cpu/cpa are integers on the wire; cpp is a
+    // 0.1-resolution percent (matches the example script's output).
     out->copilot_premium_ok        = doc["cpr"] | false;
     out->copilot_premium_pct       = doc["cpp"] | 0.0f;
     out->copilot_premium_used      = doc["cpu"] | 0;
     out->copilot_premium_allowance = doc["cpa"] | 0;
+    strlcpy(out->copilot_premium_scope, doc["cpsu"] | "org", sizeof(out->copilot_premium_scope));
     strlcpy(out->copilot_top_model, doc["cpm"] | "", sizeof(out->copilot_top_model));
 
     // Per-app visibility CSV ("usage,today,github,copilot"). Missing /

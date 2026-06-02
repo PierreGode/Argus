@@ -394,8 +394,8 @@ def demo_payload() -> str:
         "cpw": random.choice(["just now", "3 min ago", "12 min ago", "2 hours ago"]),
         "cpe": random.choice(["VS Code", "JetBrains", "Neovim"]),
         "cpr": True,
-        "cpu": random.randint(50, 950),
-        "cpa": 1000,
+        "cpu": random.randint(50, 2900),
+        "cpa": 3000,
         "cpm": random.choice(["Claude Opus 4.6", "GPT-4o", "Claude Sonnet 4.5"]),
         "apps": "usage,today,github,copilot",
     }
@@ -491,18 +491,19 @@ def _copilot_fields(cfg: dict) -> dict:
     Two independent reads, both cached separately so a failure on one
     doesn't suppress the other:
       • seat status / last activity / editor — needs `copilot_org`
-      • monthly premium-request usage         — needs `copilot_enterprise`
+        • monthly AI-credit usage               — uses `copilot_enterprise` when set,
+                                     otherwise `copilot_org`
 
     The shape we emit on the wire is intentionally flat:
         cp   bool  Copilot section enabled at all (org configured)
         cps  str   status: "active"|"idle"|"inactive"|"off"
         cpw  str   relative time of last activity, e.g. "5 min ago"
         cpe  str   pretty editor name, e.g. "VS Code"
-        cpr  bool  premium-request data available (enterprise configured + 200)
-        cpp  float premium % used (60.4 → "60.4%")
-        cpu  int   premium requests used this month
-        cpa  int   plan's monthly premium allowance
-        cpm  str   top model name, e.g. "Claude Opus 4.6"
+                cpr  bool  AI-credit data available (org billing endpoint + 200)
+                cpp  float included AI-credit % used (60.4 → "60.4%")
+                cpu  int   included AI credits consumed this month
+                cpa  int   configured monthly included AI-credit pool
+                cpm  str   top model name, e.g. "GPT-5.4"
     """
     tok = cfg.get("github_token") or ""
     org = cfg.get("copilot_org") or ""
@@ -535,14 +536,21 @@ def _copilot_fields(cfg: dict) -> dict:
                 "cpe": d.get("editor", ""),
             })
 
-    # ---- Premium-request usage ---------------------------------------
-    if ent:
+    # ---- AI-credit usage ---------------------------------------------
+    usage_scope = "enterprise" if ent else "org"
+    usage_slug = ent or org
+    if usage_slug:
         now = time.time()
-        key = hash((tok, ent, allowance))
+        key = hash((tok, usage_scope, usage_slug, allowance))
         if _cp_prem_cache["data"] and _cp_prem_cache["key_hash"] == key and (now - _cp_prem_cache["at"]) < _CP_PREM_CACHE_TTL:
             p = _cp_prem_cache["data"]
         else:
-            p = copilot_stats.fetch_premium_usage(tok, ent, allowance=allowance or None)
+            p = copilot_stats.fetch_premium_usage(
+                tok,
+                usage_slug,
+                allowance=allowance or None,
+                scope=usage_scope,
+            )
             _cp_prem_cache.update({"at": now, "data": p, "key_hash": key})
         if p.get("available"):
             out.update({
@@ -553,6 +561,7 @@ def _copilot_fields(cfg: dict) -> dict:
                 "cpp": round(float(p["pct"]), 1),
                 "cpu": int(round(p["used"])),
                 "cpa": int(p["allowance"]),
+                "cpsu": p.get("scope", "org"),
                 "cpm": p.get("top_model", "") or "",
             })
 
@@ -597,7 +606,7 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     """Decide which Argus expression to show on the splash and assemble the
     rotating event-text list below it. Priorities, highest-first:
 
-        angry      any cap >= 100% (Claude session / weekly / Copilot premium)
+        angry      any cap >= 100% (Claude session / weekly / Copilot AI credits)
         surprised  a new PR or issue arrived in the last hour
         buffeld    any cap >= 80%
         flirt      any cap >= 50%
@@ -606,7 +615,7 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
 
     Events strip lists the human-readable lines the device cycles through
     every few seconds: cap warnings (with reset countdown), Copilot
-    premium burn, GitHub queues, and any "New X" notices that arrived in
+    AI-credit burn, GitHub queues, and any "New X" notices that arrived in
     the last hour.
     """
     s   = float(fields.get("s")  or 0.0)
@@ -675,7 +684,7 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
         r = _format_reset(sr)
         events.append(f"Claude session: {int(round(s))}%" + (f" · resets in {r}" if r else ""))
     if cpr and cpa > 0 and cpp >= 50.0:
-        events.append(f"Copilot premium: {cpu}/{cpa} ({cpp:.0f}%)")
+        events.append(f"Copilot AI credits: {cpu}/{cpa} ({cpp:.0f}%)")
 
     # New-event highlights.
     if new_pr_recent:
@@ -689,7 +698,7 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
             events.append(f"GitHub: {gi} issues · {gp} PRs")
     # Always-on Copilot summary if available + not already in events.
     if cpr and cpa > 0 and cpp < 50.0 and len(events) < 4:
-        events.append(f"Copilot premium: {cpu}/{cpa} ({cpp:.0f}%)")
+        events.append(f"Copilot AI credits: {cpu}/{cpa} ({cpp:.0f}%)")
 
     if not events:
         events.append("All clear")

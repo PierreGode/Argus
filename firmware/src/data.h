@@ -33,16 +33,16 @@ struct UsageData {
     char copilot_when[16];   // "5 min ago" / "2 hours ago" / "3 days ago" / "—"
     char copilot_editor[16]; // "VS Code" / "JetBrains" / "Neovim" / "" if unknown
 
-    // Premium-request usage block. Sourced from the GitHub Enterprise
-    // billing endpoint via copilot_stats.fetch_premium_usage(). Only
-    // populated when an enterprise slug is configured AND the PAT has
-    // billing-read scope on it; otherwise copilot_premium_ok = false
-    // and the firmware hides the panel.
+    // AI-credits usage block. Sourced from the org billing usage summary
+    // plus the org premium-request breakdown via
+    // copilot_stats.fetch_premium_usage(). Variable names still use the
+    // historical "premium" prefix to keep the wire format stable.
     bool     copilot_premium_ok;
     float    copilot_premium_pct;       // 0.0 .. 100.0+
-    uint16_t copilot_premium_used;      // requests this month
-    uint16_t copilot_premium_allowance; // monthly cap (300 / 1000 / 1500)
-    char     copilot_top_model[32];     // e.g. "Claude Opus 4.6"
+    uint16_t copilot_premium_used;      // included AI credits consumed this month
+    uint16_t copilot_premium_allowance; // configured monthly included pool
+    char     copilot_premium_scope[12]; // "org" or "enterprise"
+    char     copilot_top_model[32];     // e.g. "GPT-5.4"
 
     // ---- Enabled-apps CSV ("usage,today,github,copilot") ----
     // Daemon publishes the user's chosen visibility list every payload. UI

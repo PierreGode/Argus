@@ -69,10 +69,11 @@ static lv_obj_t* lbl_today_models;
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
 static lv_obj_t* copilot_container;
-// Copilot screen — single big "Premium requests / NN.N%" panel, top-model
+// Copilot screen — single big "AI credits / NN.N%" panel, top-model
 // line, and a single-row status strip at the bottom.
 static lv_obj_t* lbl_cp_premium_pct;     // huge "60.4%"
 static lv_obj_t* lbl_cp_premium_counts;  // "604 / 1000 this month"
+static lv_obj_t* lbl_cp_scope_pill;      // "Org" / "Enterprise"
 static lv_obj_t* lbl_cp_top_model;       // "Claude Opus 4.6"
 static lv_obj_t* lbl_cp_strip;           // bottom row "VS Code · 5 min ago"
 static lv_obj_t* lbl_cp_hint;            // fallback hint when nothing is wired
@@ -395,16 +396,24 @@ static void init_copilot_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
     lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
 
-    // Big Premium-requests panel — "Usage" pill on the right, "Premium
-    // requests" subtitle, huge percentage, "X / Y this month" counter.
+    // Big AI-credits panel — "Usage" pill on the right, "AI credits"
+    // subtitle, huge percentage, "X / Y this month" counter.
     lv_obj_t* p_premium = make_panel(copilot_container, MARGIN, CONTENT_Y,
                                      CONTENT_W, PANEL_H + 60);
 
     lv_obj_t* pill_usage = make_pill(p_premium, "Usage");
     lv_obj_align(pill_usage, LV_ALIGN_TOP_RIGHT, 0, 1);
 
+    lbl_cp_scope_pill = make_pill(p_premium, "Org");
+    lv_obj_set_style_text_font(lbl_cp_scope_pill, &font_styrene_20, 0);
+    lv_obj_set_style_pad_left(lbl_cp_scope_pill, 14, 0);
+    lv_obj_set_style_pad_right(lbl_cp_scope_pill, 14, 0);
+    lv_obj_set_style_pad_top(lbl_cp_scope_pill, 4, 0);
+    lv_obj_set_style_pad_bottom(lbl_cp_scope_pill, 4, 0);
+    lv_obj_align(lbl_cp_scope_pill, LV_ALIGN_TOP_RIGHT, 0, 48);
+
     lv_obj_t* sub_premium = lv_label_create(p_premium);
-    lv_label_set_text(sub_premium, "Premium requests");
+    lv_label_set_text(sub_premium, "AI credits");
     lv_obj_set_style_text_font(sub_premium, &font_styrene_24, 0);
     lv_obj_set_style_text_color(sub_premium, COL_DIM, 0);
     lv_obj_set_pos(sub_premium, 0, 0);
@@ -580,6 +589,8 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_gh_status,       "Waiting for daemon");
         lv_label_set_text(lbl_cp_premium_pct,    "—");
         lv_label_set_text(lbl_cp_premium_counts, "");
+        lv_label_set_text(lbl_cp_scope_pill,     "");
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_TRANSP, 0);
         lv_label_set_text(lbl_cp_top_model,      "");
         lv_label_set_text(lbl_cp_strip,          "");
         lv_label_set_text(lbl_cp_hint,           "Waiting for daemon");
@@ -665,7 +676,7 @@ void ui_update(const UsageData* data) {
     }
 
     // ---- Copilot screen ----
-    // Big panel: "Premium requests" with a huge percentage and an
+    // Big panel: "AI credits" with a huge percentage and an
     // "X / Y this month" counter. Top-model row underneath. Bottom strip
     // (one line) packs the status / editor / last-seen info that used to
     // get its own panel.
@@ -680,11 +691,20 @@ void ui_update(const UsageData* data) {
                  (unsigned)data->copilot_premium_allowance);
         lv_label_set_text(lbl_cp_premium_counts, cnt_buf);
 
+        const char* scope = "Org";
+        if (strcmp(data->copilot_premium_scope, "enterprise") == 0) {
+            scope = "Enterprise";
+        }
+        lv_label_set_text(lbl_cp_scope_pill, scope);
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_COVER, 0);
+
         lv_label_set_text(lbl_cp_top_model,
                           data->copilot_top_model[0] ? data->copilot_top_model : "");
     } else {
         lv_label_set_text(lbl_cp_premium_pct,    "—");
         lv_label_set_text(lbl_cp_premium_counts, "");
+        lv_label_set_text(lbl_cp_scope_pill,     "");
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_TRANSP, 0);
         lv_label_set_text(lbl_cp_top_model,      "");
     }
 

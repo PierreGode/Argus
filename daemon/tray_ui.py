@@ -56,23 +56,13 @@ def config_path() -> Path:
 DEFAULTS = {
     "github_token": "",
     "copilot_org": "",         # GitHub org slug for Copilot seat lookup (status / editor / last activity)
-    "copilot_enterprise": "",  # GitHub Enterprise slug for premium-request usage endpoint
-    "copilot_allowance": 1000, # monthly premium-request allowance per plan (300/1000/300/1500)
+    "copilot_enterprise": "",  # Optional enterprise slug for enterprise-level AI usage consumption
+    "copilot_allowance": 3000,  # monthly included AI-credit pool for the org or billing entity
     "brightness": 100,         # 10..100 — software dim overlay on the device
     "transport": "ble",        # "ble" | "usb"
     "poll_interval": 60,       # seconds between Anthropic API polls
     "enabled_apps": ["usage", "today", "github", "copilot"],  # which tabs cycle on the device
 }
-
-# Premium-request monthly allowance by Copilot plan tier. The dropdown in
-# the Copilot settings tab maps to these values. Numbers come from the
-# user-provided example script + GitHub's published per-plan quotas.
-COPILOT_PLAN_PRESETS = [
-    ("Copilot Enterprise (1000)", 1000),
-    ("Copilot Business (300)",     300),
-    ("Copilot Pro (300)",          300),
-    ("Copilot Pro+ (1500)",       1500),
-]
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
 # membership of `enabled_apps`. Add a new app by appending here (and
@@ -540,7 +530,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
         QApplication, QMainWindow, QSystemTrayIcon, QMenu, QWidget,
         QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QGroupBox, QRadioButton, QButtonGroup, QSlider, QPlainTextEdit,
-        QFrame, QComboBox, QCheckBox, QTabWidget,
+        QFrame, QComboBox, QCheckBox, QTabWidget, QSpinBox,
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -814,7 +804,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             hint = QLabel(
                 "Org slug → drives seat status, last activity and editor. "
                 "Reuses the GitHub PAT from the GitHub tab; PAT needs "
-                "admin / Copilot Business seat-read on this org."
+                "admin / seat access on this org."
             )
             hint.setObjectName("muted")
             hint.setWordWrap(True)
@@ -822,38 +812,34 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             cp.setLayout(cl)
             v.addWidget(cp)
 
-            ent = QGroupBox("Enterprise (premium requests)")
+            ent = QGroupBox("AI usage")
             el = QVBoxLayout()
             el.setSpacing(8)
+
             self.ed_copilot_enterprise = QLineEdit(cfg.get("copilot_enterprise", ""))
-            self.ed_copilot_enterprise.setPlaceholderText("github enterprise slug (e.g. My-Enterprise)")
+            self.ed_copilot_enterprise.setPlaceholderText("optional enterprise slug (e.g. my-enterprise)")
             el.addWidget(self.ed_copilot_enterprise)
 
-            # Plan / allowance dropdown — picks the monthly premium-request
-            # quota the device divides usage against. Keep in sync with
-            # copilot_stats.ALLOWANCE_BY_PLAN.
             plan_row = QHBoxLayout()
             plan_row.setSpacing(10)
-            plan_lbl = QLabel("Plan")
+            plan_lbl = QLabel("Pool")
             plan_lbl.setMinimumWidth(60)
             plan_row.addWidget(plan_lbl)
-            self.cb_copilot_plan = QComboBox()
-            current_allowance = int(cfg.get("copilot_allowance") or DEFAULTS["copilot_allowance"])
-            sel = 0
-            for i, (label, alw) in enumerate(COPILOT_PLAN_PRESETS):
-                self.cb_copilot_plan.addItem(label, alw)
-                if alw == current_allowance:
-                    sel = i
-            self.cb_copilot_plan.setCurrentIndex(sel)
-            plan_row.addWidget(self.cb_copilot_plan, stretch=1)
+            self.sp_copilot_allowance = QSpinBox()
+            self.sp_copilot_allowance.setRange(0, 10_000_000)
+            self.sp_copilot_allowance.setSingleStep(100)
+            self.sp_copilot_allowance.setValue(
+                int(cfg.get("copilot_allowance") or DEFAULTS["copilot_allowance"])
+            )
+            self.sp_copilot_allowance.setSuffix(" credits")
+            plan_row.addWidget(self.sp_copilot_allowance, stretch=1)
             el.addLayout(plan_row)
 
             hint_e = QLabel(
-                "Enterprise slug → drives the \"Premium requests X/Y "
-                "(NN%)\" display. Needs a PAT with enterprise billing read "
-                "access. Leave blank if your Copilot Business org isn't "
-                "under an enclosing enterprise — the percentage panel will "
-                "just be hidden."
+                "Leave enterprise blank to read AI usage from the org. Set an "
+                "enterprise slug to read enterprise-wide consumption instead. "
+                "Pool is the total monthly included AI-credit allowance GitHub "
+                "shows for that billing entity."
             )
             hint_e.setObjectName("muted")
             hint_e.setWordWrap(True)
@@ -899,8 +885,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "github_token":       self.ed_token.text().strip(),
                 "copilot_org":        self.ed_copilot_org.text().strip(),
                 "copilot_enterprise": self.ed_copilot_enterprise.text().strip(),
-                "copilot_allowance":  int(self.cb_copilot_plan.currentData()
-                                         or DEFAULTS["copilot_allowance"]),
+                "copilot_allowance":  int(self.sp_copilot_allowance.value()),
                 "brightness":         int(self.sl_bright.value()),
                 "transport":          "usb" if self.rb_usb.isChecked() else "ble",
                 "poll_interval":      max(5, interval),
