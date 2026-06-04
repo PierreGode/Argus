@@ -2,6 +2,18 @@
 
 A small ESP32 dashboard that sits on my desk and watches my dev workflow — Claude Code rate limits, GitHub issues and PRs, today's token spend — then auto-switches to whichever screen has news.
 
+<img width="2754" height="2653" alt="image" src="https://github.com/user-attachments/assets/68f12387-425f-4429-98ae-fcf08741885d" />
+
+<img width="2750" height="2581" alt="image" src="https://github.com/user-attachments/assets/a811385c-829d-47f9-bbc1-4fb89a20e7e8" />
+
+<img width="2836" height="2700" alt="image" src="https://github.com/user-attachments/assets/badafd92-f4e3-4a13-b16a-f82d13852c67" />
+
+
+<img width="2963" height="2907" alt="image" src="https://github.com/user-attachments/assets/adbd3f8e-8bff-4b01-b44f-19330b06f81c" />
+
+
+
+
 It runs on a [ESP32-S3 Smart 86 Box Development Board touch LCD ](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm?srsltid=AfmBOoqCfMzBwrAlBizVvAYwWNn8y5nF47A394HkxzyLU1cAYydvO8_g), pairs with my laptop over Bluetooth (or USB-C), and the splash screen plays pixel-art Clawd animations that get busier when your usage rate climbs. The two side buttons send Space and Shift+Tab over BLE HID for Claude Code's voice-mode and mode-toggle shortcuts.
   
 
