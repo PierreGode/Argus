@@ -273,7 +273,3 @@ pio run -d firmware -t upload
 ```
 
 See `tools/README.md` for details.
-
-## credit
-
-Idea of Argus is inspired from **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)
