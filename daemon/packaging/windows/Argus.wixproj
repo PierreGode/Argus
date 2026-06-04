@@ -1,0 +1,29 @@
+<!--
+  MSBuild SDK-style WiX project. Build with:
+    dotnet build Argus.wixproj -c Release `
+      -p:ArgusVersion=1.0.0 `
+      -p:ArgusExe=<abs path to argus-daemon.exe> `
+      -p:ArgusIco=<abs path to argus.ico> `
+      -p:ArgusLicense=<abs path to license.rtf>
+
+  WiX is pinned to v5: v6/v7 require accepting the Open Source Maintenance Fee
+  (OSMF) EULA, which we avoid. The SDK + UI extension restore via normal NuGet,
+  sidestepping the broken `wix extension add` global cache on .NET-10 machines.
+
+  The compiled MSI lands in bin/<Configuration>/Argus-Setup.msi.
+-->
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <PropertyGroup>
+    <OutputName>Argus-Setup</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+    <!-- argus.wxs consumes these as $(var.Name). -->
+    <DefineConstants>Version=$(ArgusVersion);ExePath=$(ArgusExe);IcoPath=$(ArgusIco);LicenseRtf=$(ArgusLicense)</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WixUI_InstallDir dialog set. The SDK auto-adds wixext PackageReferences
+         as compiler/linker extensions, so no -ext flag is needed. -->
+    <PackageReference Include="WixToolset.UI.wixext" Version="5.0.2" />
+  </ItemGroup>
+</Project>

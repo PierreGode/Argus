@@ -28,6 +28,29 @@ from typing import Callable
 import token_crypt  # local module: DPAPI wrapper for the GitHub PAT
 
 
+# ----- Resource resolution --------------------------------------------------
+
+def resource_path(*rel: str) -> Path:
+    """Resolve a bundled data file across run-from-source and PyInstaller.
+
+    Under PyInstaller --onefile, datas are unpacked to a temp dir exposed as
+    `sys._MEIPASS`; the spec bundles assets there under `assets/...`. When run
+    from source, assets live one level up from this file (../assets/...).
+    Returns the first candidate that exists, else the source-tree path.
+    """
+    here = Path(__file__).resolve().parent
+    bases = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    bases += [here.parent, here]
+    for base in bases:
+        cand = base.joinpath(*rel)
+        if cand.exists():
+            return cand
+    return bases[0].joinpath(*rel)
+
+
 # ----- Config file path -----------------------------------------------------
 
 APP_NAME = "Argus"
@@ -490,11 +513,12 @@ def _make_app_icon():
     from PySide6.QtCore import Qt, QSize, QPointF
     from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon
 
-    # Locate assets/img/happy.png relative to the daemon source tree.
-    here = Path(__file__).resolve().parent
+    # Locate the mascot/icon — works both from source and inside a PyInstaller
+    # bundle (resource_path checks sys._MEIPASS). Prefer the multi-res .ico, then
+    # the mascot sprite.
     for candidate in (
-        here.parent / "assets" / "img" / "happy.png",
-        here / "assets" / "img" / "happy.png",
+        resource_path("assets", "argus.ico"),
+        resource_path("assets", "img", "happy.png"),
     ):
         if candidate.exists():
             pm = QPixmap(str(candidate))

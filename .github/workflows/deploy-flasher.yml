@@ -51,34 +51,36 @@ jobs:
         run: pip install -r daemon/requirements.txt
 
       - name: Build daemon binary
-        # --paths daemon: resolve local sibling imports (claude_logs, github_stats, tray_ui).
-        # --windowed:    suppress the console window on Windows / macOS.
-        # Linux gets a console build because tk/pystray emit useful logs there
-        # and there's no GUI-bundling distinction on Linux anyway.
+        # The spec (daemon/argus-daemon.spec) embeds the mascot icon + Windows
+        # version metadata, bundles assets, and picks console (Linux) vs
+        # windowed (Windows/macOS) automatically.
         shell: bash
-        run: |
-          MODE_FLAG="--windowed"
-          if [ "${{ matrix.os }}" = "ubuntu-latest" ]; then
-            MODE_FLAG="--console"
-          fi
-          pyinstaller --onefile $MODE_FLAG \
-            --name argus-daemon \
-            --paths daemon \
-            --hidden-import claude_logs \
-            --hidden-import github_stats \
-            --hidden-import tray_ui \
-            daemon/argus-daemon.py
+        run: pyinstaller daemon/argus-daemon.spec --noconfirm
 
-      - name: Rename to per-platform asset name
+      - name: Build Windows MSI (WiX)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $base = [regex]::Match((Get-Content daemon/version.py -Raw), '"([^"]+)"').Groups[1].Value
+          $mm = ($base -split '\.')[0..1] -join '.'
+          # 3-field, monotonically increasing -> each build is a clean upgrade.
+          $msiVersion = "$mm.$env:GITHUB_RUN_NUMBER"
+          Write-Host "MSI version: $msiVersion"
+          ./daemon/packaging/windows/build-msi.ps1 -SkipExe -Version $msiVersion
+
+      - name: Stage per-platform assets
         shell: bash
         run: |
           mkdir -p staged
           cp "dist/${{ matrix.out_name }}" "staged/${{ matrix.asset_name }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            cp dist/Argus-Setup.msi staged/Argus-Setup.msi
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
           name: daemon-${{ matrix.os }}
-          path: staged/${{ matrix.asset_name }}
+          path: staged/
           if-no-files-found: error
 
   build-and-deploy:
@@ -143,8 +145,9 @@ jobs:
 
           # Daemon binaries — merge-multiple flattened them into daemon-artifacts/.
           cp daemon-artifacts/argus-daemon-windows.exe site/daemon/
-          cp daemon-artifacts/argus-daemon-macos      site/daemon/
-          cp daemon-artifacts/argus-daemon-linux      site/daemon/
+          cp daemon-artifacts/Argus-Setup.msi          site/daemon/
+          cp daemon-artifacts/argus-daemon-macos       site/daemon/
+          cp daemon-artifacts/argus-daemon-linux       site/daemon/
           chmod +x site/daemon/argus-daemon-macos site/daemon/argus-daemon-linux
 
           VERSION="$(date -u +%-m.%-d).${GITHUB_SHA::7}"

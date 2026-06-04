@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX v4/v5/v6 source for the Argus per-machine MSI.
+
+  Build (see build-msi.ps1) with the WiX dotnet tool:
+    wix build argus.wxs -arch x64 -ext WixToolset.UI.wixext ^
+      -d Version=1.0.0.0 ^
+      -d ExePath=..\..\..\dist\argus-daemon.exe ^
+      -d IcoPath=..\..\..\assets\argus.ico ^
+      -d LicenseRtf=license.rtf ^
+      -o Argus-Setup.msi
+
+  Per-machine (Program Files) install: requires admin/UAC. Without a paid
+  code-signing cert the elevation prompt shows "unknown publisher" — this is
+  expected and unavoidable without buying a certificate.
+
+  The MSI deliberately does NOT create an autostart entry; the app manages
+  "Start with Windows" itself via a per-user HKCU\...\Run key (tray_ui.py).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+
+  <Package Name="Argus"
+           Manufacturer="PierreGode"
+           Version="$(var.Version)"
+           UpgradeCode="92AA6D86-84AC-48E3-A271-DA423B1D5447"
+           Scope="perMachine"
+           Compressed="yes"
+           InstallerVersion="500">
+
+    <SummaryInformation Description="Argus desktop daemon — Claude Code usage monitor"
+                        Manufacturer="PierreGode" />
+
+    <!-- Clean in-place upgrades: a newer version replaces the older one. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Argus is already installed. Setup will now exit." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- Add/Remove Programs ("Apps & features") metadata. -->
+    <Icon Id="ArgusIcon" SourceFile="$(var.IcoPath)" />
+    <Property Id="ARPPRODUCTICON" Value="ArgusIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/PierreGode/Argus" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/PierreGode/Argus" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <!-- Installed files: Program Files\Argus\ -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Argus">
+        <Component Id="MainExe" Guid="*">
+          <File Id="ArgusDaemonExe"
+                Source="$(var.ExePath)"
+                Name="argus-daemon.exe"
+                KeyPath="yes" />
+        </Component>
+        <Component Id="AppIcon" Guid="*">
+          <File Id="ArgusIcoFile" Source="$(var.IcoPath)" Name="argus.ico" KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- Start Menu shortcut. HKMU keypath resolves to HKLM for a per-machine
+         package (avoids per-user-component ICE warnings). -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="*">
+        <Shortcut Id="ArgusStartMenu"
+                  Name="Argus"
+                  Description="Argus desktop daemon — Claude Code usage monitor"
+                  Target="[INSTALLFOLDER]argus-daemon.exe"
+                  WorkingDirectory="INSTALLFOLDER"
+                  Icon="ArgusIcon" />
+        <RemoveFolder Id="CleanupStartMenu" On="uninstall" />
+        <RegistryValue Root="HKMU"
+                       Key="Software\PierreGode\Argus"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Argus" Level="1">
+      <ComponentRef Id="MainExe" />
+      <ComponentRef Id="AppIcon" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <!-- Professional install-dir dialog set + license page. -->
+    <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
+  </Package>
+</Wix>

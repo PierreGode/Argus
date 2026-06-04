@@ -25,6 +25,7 @@ from claude_logs import to_payload_fields as today_payload_fields
 import github_stats
 import copilot_stats
 import tray_ui
+from version import __version__
 
 # ---- BLE UUIDs (must match firmware ble.cpp) ----
 SERVICE_UUID    = "4c41555a-4465-7669-6365-000000000001"
@@ -966,6 +967,8 @@ async def run_ble(demo_mode: bool, token,
 
 def parse_args():
     p = argparse.ArgumentParser(description="Argus daemon")
+    p.add_argument("--version", action="version",
+                   version=f"Argus daemon {__version__}")
     p.add_argument("--serial", nargs="?", const="auto", metavar="PORT",
                    help="Override transport: use USB CDC serial. Pass nothing to "
                         "auto-detect the ESP32-S3 (VID 0x303A), or a port like "

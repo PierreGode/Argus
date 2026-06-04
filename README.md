@@ -20,8 +20,10 @@ What Argus Offers:
 ## Quick start
 
 1. **Flash the firmware**: open <https://pierregode.github.io/Argus/> in Chrome / Edge / Opera, plug the board in over USB-C, click **Flash Argus**. (Pages deployment needs to be set up against the renamed repo — see the workflows in `.github/`. Until then, build from source — see [Build the firmware](#build-the-firmware-locally).)
-2. **Download the daemon** from the same page (Windows `.exe`, macOS, or Linux binary).
+2. **Download the daemon** from the same page. On Windows, grab **`Argus-Setup.msi`** (a proper installer — adds Argus to the Start menu and Apps & features; a portable `.exe` is also linked). macOS / Linux get a single binary.
 3. **Run it**: it lives in the system tray. Right-click → **Show window** to enter a GitHub token, set brightness, pick BLE / USB-C transport, choose poll interval, or toggle Start with Windows. Settings are saved to `%APPDATA%\Argus\config.json` (or the platform-equivalent) and applied on the next send.
+
+> **Windows install note:** the MSI is per-machine, so it asks for admin rights. These builds are **not signed with a commercial code-signing certificate**, so Windows shows an "unknown publisher" UAC prompt and SmartScreen may warn on first run — choose **More info → Run anyway**. Only a paid OV/EV certificate removes those warnings; a self-signed cert does not.
 
 The device pairs the first time it sees the daemon; from then on it reconnects automatically.
 
@@ -192,10 +194,24 @@ The firmware ignores keys it doesn't recognize, so older daemons (rate-limit fie
 `.github/workflows/deploy-flasher.yml` runs on every push to `main`:
 
 1. **Build the firmware** with PlatformIO, merge bootloader + partitions + app into a single offset-0 image with `esptool merge_bin`.
-2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller.
-3. **Deploy to GitHub Pages** — the firmware bin, the three daemon binaries, the splash animations, and the flasher HTML all ship together.
+2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
+3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable exe, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
 
 The page uses [esp-web-tools](https://esphome.github.io/esp-web-tools/) for the Web Serial flash flow.
+
+### Building the Windows installer locally
+
+The whole EXE + MSI build is one script (run on Windows, PowerShell 7):
+
+```powershell
+# from the repo root
+pwsh daemon/packaging/windows/build-msi.ps1
+# -> dist/argus-daemon.exe  and  dist/Argus-Setup.msi
+```
+
+It generates `assets/argus.ico` from the mascot if missing (needs Pillow), builds the EXE from the spec, installs the WiX `dotnet tool` on first run, then emits the MSI. CI uses Python 3.12; if PySide6 lacks wheels for your local Python, pass `-Python "py -3.12"`. The build is **cert-ready**: set `$env:ARGUS_SIGN_CERT` (and `$env:ARGUS_SIGN_PASS`) to a `.pfx` to Authenticode-sign the exe + msi — but without a CA-trusted cert this does not remove the SmartScreen / "unknown publisher" warnings.
+
+Version comes from [`daemon/version.py`](daemon/version.py) (single source of truth, also exposed via `argus-daemon --version`).
 
 ## Migration from Clawdmeter
 
@@ -260,4 +276,4 @@ See `tools/README.md` for details.
 
 ## credit
 
-Argus is inspired from **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)
+Idea of Argus is inspired from **[HermannBjorgvin/Clawdmeter](https://github.com/HermannBjorgvin/Clawdmeter)
