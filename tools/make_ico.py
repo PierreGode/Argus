@@ -20,10 +20,17 @@ from PIL import Image
 SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 
-def trim_to_content(img: Image.Image) -> Image.Image:
-    """Crop transparent margins so the mascot fills the icon."""
+def trim_to_content(img: Image.Image, alpha_threshold: int = 16) -> Image.Image:
+    """Crop to the *dense* mascot, so it fills the icon.
+
+    The source sprite has faint near-transparent stray pixels near the edges
+    (alpha 1-8), so a plain getbbox() (any non-zero alpha) barely crops and
+    leaves the mascot tiny and centered. Threshold the alpha first to find the
+    bounding box of the actually-visible mascot.
+    """
     img = img.convert("RGBA")
-    bbox = img.getbbox()
+    mask = img.getchannel("A").point(lambda a: 255 if a > alpha_threshold else 0)
+    bbox = mask.getbbox()
     return img.crop(bbox) if bbox else img
 
 
