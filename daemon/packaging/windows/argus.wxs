@@ -57,8 +57,11 @@
       </Directory>
     </StandardDirectory>
 
-    <!-- Start Menu shortcut. HKMU keypath resolves to HKLM for a per-machine
-         package (avoids per-user-component ICE warnings). -->
+    <!-- Start Menu shortcut. A shortcut component is classified as per-user
+         data, so its keypath must be HKCU (ICE38/ICE43) and the component must
+         not also carry per-machine data (ICE57). This is the canonical pattern
+         and is correct even in a per-machine package: the shortcut still lands
+         in the All-Users Start Menu; only the breadcrumb is per-user. -->
     <StandardDirectory Id="ProgramMenuFolder">
       <Component Id="StartMenuShortcut" Guid="*">
         <Shortcut Id="ArgusStartMenu"
@@ -68,7 +71,7 @@
                   WorkingDirectory="INSTALLFOLDER"
                   Icon="ArgusIcon" />
         <RemoveFolder Id="CleanupStartMenu" On="uninstall" />
-        <RegistryValue Root="HKMU"
+        <RegistryValue Root="HKCU"
                        Key="Software\PierreGode\Argus"
                        Name="installed"
                        Type="integer"

@@ -25,6 +25,10 @@ param(
     # monotonically increasing 3-field value (e.g. 1.0.<run_number>) so each
     # build is treated as a clean upgrade.
     [string]$Version,
+    # Build number. When set (and -Version is not), the patch field of the
+    # version.py base is replaced with it -> major.minor.<build>, giving a
+    # monotonically increasing 3-field version (CI passes $GITHUB_RUN_NUMBER).
+    [string]$BuildNumber,
     # Python launcher to use for PyInstaller.
     [string]$Python = "python",
     # Skip the PyInstaller step and reuse an existing dist\argus-daemon.exe.
@@ -49,10 +53,19 @@ $License   = Join-Path $ScriptDir "license.rtf"
 $Msi       = Join-Path $DistDir "Argus-Setup.msi"
 
 # --- Version ----------------------------------------------------------------
+# Anchor on __version__ (NOT the first quoted string — the module docstring
+# also contains quotes). -Version overrides everything; otherwise read the base
+# from version.py and optionally swap in -BuildNumber as the patch field.
 if (-not $Version) {
     $verPy = Get-Content (Join-Path $DaemonDir "version.py") -Raw
-    if ($verPy -match '__version__\s*=\s*"([^"]+)"') { $Version = $Matches[1] }
+    if ($verPy -match '__version__\s*=\s*"([^"]+)"') { $base = $Matches[1] }
     else { throw "Could not read __version__ from version.py" }
+    if ($BuildNumber) {
+        $mm = ($base -split '\.')[0..1] -join '.'
+        $Version = "$mm.$BuildNumber"
+    } else {
+        $Version = $base
+    }
 }
 Write-Host "==> Building Argus $Version" -ForegroundColor Cyan
 
@@ -82,8 +95,12 @@ if (-not (Test-Path $Exe)) { throw "dist\argus-daemon.exe not found." }
 # The SDK project restores WiX 5 + the UI extension via normal NuGet, which works.
 $Proj = Join-Path $ScriptDir "Argus.wixproj"
 Write-Host "==> WiX (MSBuild SDK): building Argus-Setup.msi" -ForegroundColor Cyan
-# Explicit restore first: the WixToolset.Sdk project SDK is resolved from NuGet
-# and must be present before MSBuild can evaluate the project (a single implicit
+# Clean prior outputs first: MSBuild incremental build does NOT treat a changed
+# -p:ArgusVersion as a rebuild trigger, so a stale .msi could keep an old
+# version. Removing bin/obj guarantees the version is recompiled.
+Remove-Item (Join-Path $ScriptDir "bin"), (Join-Path $ScriptDir "obj") -Recurse -Force -ErrorAction SilentlyContinue
+# Explicit restore: the WixToolset.Sdk project SDK is resolved from NuGet and
+# must be present before MSBuild can evaluate the project (a single implicit
 # restore+build can fail the first time on a clean machine).
 dotnet restore $Proj
 if ($LASTEXITCODE -ne 0) { throw "dotnet restore (WiX) failed ($LASTEXITCODE)" }
