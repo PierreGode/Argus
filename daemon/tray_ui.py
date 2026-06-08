@@ -406,6 +406,25 @@ QRadioButton, QCheckBox {{
 QRadioButton::indicator, QCheckBox::indicator {{
     width: 14px;
     height: 14px;
+    border: 2px solid {CREAM};
+    background: transparent;
+}}
+
+QRadioButton::indicator {{
+    border-radius: 9px;
+}}
+
+QCheckBox::indicator {{
+    border-radius: 4px;
+}}
+
+QRadioButton::indicator:hover, QCheckBox::indicator:hover {{
+    border-color: {TERRA_HOVER};
+}}
+
+QRadioButton::indicator:checked, QCheckBox::indicator:checked {{
+    border: 2px solid {TERRA};
+    background: {TERRA};
 }}
 
 QSlider::groove:horizontal {{
