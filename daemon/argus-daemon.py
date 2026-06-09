@@ -585,7 +585,7 @@ def _apps_csv(cfg: dict) -> str:
 
 def _format_reset(mins: int) -> str:
     """Compact 'resets in Xh Ym' / 'Xd Yh' / 'Xm' string for the events
-    strip. -1 / 0 -> empty so callers can append " · resets in X" safely."""
+    strip. -1 / 0 -> empty so callers can append " - resets in X" safely."""
     if mins is None or mins < 0:
         return ""
     if mins < 60:
@@ -680,23 +680,23 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     # Hot caps first.
     if w >= 50.0:
         r = _format_reset(wr)
-        events.append(f"Claude weekly: {int(round(w))}%" + (f" · resets in {r}" if r else ""))
+        events.append(f"Claude weekly: {int(round(w))}%" + (f" - resets in {r}" if r else ""))
     if s >= 50.0:
         r = _format_reset(sr)
-        events.append(f"Claude session: {int(round(s))}%" + (f" · resets in {r}" if r else ""))
+        events.append(f"Claude session: {int(round(s))}%" + (f" - resets in {r}" if r else ""))
     if cpr and cpa > 0 and cpp >= 50.0:
         events.append(f"Copilot AI credits: {cpu}/{cpa} ({cpp:.0f}%)")
 
     # New-event highlights.
     if new_pr_recent:
-        events.append(f"New PR · awaiting review (total {gp})")
+        events.append(f"New PR - awaiting review (total {gp})")
     if new_issue_recent:
-        events.append(f"New issue · assigned to you (total {gi})")
+        events.append(f"New issue - assigned to you (total {gi})")
 
     # Steady-state queues — only when nothing more urgent is on the list.
     if ge and not events:
         if gp or gi:
-            events.append(f"GitHub: {gi} issues · {gp} PRs")
+            events.append(f"GitHub: {gi} issues - {gp} PRs")
     # Always-on Copilot summary if available + not already in events.
     if cpr and cpa > 0 and cpp < 50.0 and len(events) < 4:
         events.append(f"Copilot AI credits: {cpu}/{cpa} ({cpp:.0f}%)")
