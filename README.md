@@ -13,7 +13,7 @@ A small ESP32 dashboard that sits on my desk and watches my dev workflow — Cla
   </tr>
 </table>
 
-It runs on a [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm), pairs with my laptop over Bluetooth (or USB-C), and the splash screen shows an animated mascot whose expression tracks how hard you're pushing your limits.
+It runs on a [Waveshare ESP32-S3 Smart 86 Box Development Board]([https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm?srsltid=AfmBOooN9vv19u7xrLtIeogvE-IVSSIeT_IpFkS2dTC-TlfwmNQxaFYp)), pairs with my laptop over Bluetooth (or USB-C), and the splash screen shows an animated mascot whose expression tracks how hard you're pushing your limits.
 
 What Argus shows:
 
