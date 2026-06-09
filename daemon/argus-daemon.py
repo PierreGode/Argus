@@ -428,6 +428,18 @@ _CP_CACHE_TTL = 60
 _cp_prem_cache = {"at": 0.0, "data": None, "key_hash": None}
 _CP_PREM_CACHE_TTL = 300
 
+
+def force_refresh() -> None:
+    """Expire the GitHub / Copilot response caches so the very next poll
+    re-fetches from every source. Called when the user presses Save (paired
+    with a wake) so the device reflects current data immediately instead of
+    showing values cached for up to the per-source TTL (GitHub 5 min, Copilot
+    seat 60 s, AI-credits 5 min). The Anthropic rate-limit read already happens
+    on every poll, so it needs no invalidation here."""
+    _gh_cache["at"] = 0.0
+    _cp_cache["at"] = 0.0
+    _cp_prem_cache["at"] = 0.0
+
 # Snapshot of the last poll's "watch these for changes" counters. None means
 # "we haven't observed a baseline yet" — first run after a daemon restart
 # never triggers an auto-focus, so we don't yank the screen on every reboot.
@@ -1075,8 +1087,12 @@ if __name__ == "__main__":
             log(f"Settings saved: transport={new_cfg['transport']} "
                 f"brightness={new_cfg['brightness']} "
                 f"github={'set' if new_cfg['github_token'] else 'cleared'}")
-            # Kick the worker out of its inter-poll sleep so the new
-            # settings ship to the device on the next tick instead of
+            # Drop the GitHub/Copilot caches so the immediate push re-polls
+            # every source — Save means "show me current data now", not the
+            # values cached from the last tick.
+            force_refresh()
+            # Kick the worker out of its inter-poll sleep so the new settings +
+            # freshly-pulled data ship to the device on the next tick instead of
             # waiting up to POLL_INTERVAL seconds.
             wake_event.set()
 
