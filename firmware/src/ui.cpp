@@ -92,6 +92,13 @@ static lv_obj_t* lbl_ble_status;
 static lv_obj_t* lbl_ble_device;
 static lv_obj_t* lbl_ble_mac;
 
+// ---- Battery indicator (top-right, floats over every screen) ----
+static lv_obj_t* batt_box   = nullptr;   // transparent container on the top layer
+static lv_obj_t* batt_label = nullptr;   // "85%"
+static lv_obj_t* batt_shell = nullptr;   // battery outline
+static lv_obj_t* batt_bar   = nullptr;   // fill level
+static lv_obj_t* batt_nub   = nullptr;   // terminal nub
+
 // ---- Shared ----
 static screen_t current_screen = SCREEN_USAGE;
 
@@ -654,6 +661,78 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
 // ======== Public API ========
 
+// Build the top-right battery indicator on the always-on-top layer so it shows
+// over every screen (including the splash) without re-adding it per screen.
+// Hidden until ui_set_battery() reports a connected battery. Drawn from LVGL
+// primitives (shell outline + bar fill + nub) so it needs no icon assets.
+static void init_battery_indicator(void) {
+    lv_obj_t* top = lv_layer_top();
+
+    batt_box = lv_obj_create(top);
+    lv_obj_remove_style_all(batt_box);
+    lv_obj_set_size(batt_box, 92, 26);
+    lv_obj_align(batt_box, LV_ALIGN_TOP_RIGHT, -12, 12);
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_CLICKABLE);   // let taps pass to the screen below
+    lv_obj_add_flag(batt_box, LV_OBJ_FLAG_HIDDEN);        // shown only when a battery is present
+
+    batt_label = lv_label_create(batt_box);
+    lv_label_set_text(batt_label, "");
+    lv_obj_set_style_text_font(batt_label, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(batt_label, COL_TEXT, 0);
+    lv_obj_align(batt_label, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_clear_flag(batt_label, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_shell = lv_obj_create(batt_box);
+    lv_obj_remove_style_all(batt_shell);
+    lv_obj_set_size(batt_shell, 34, 18);
+    lv_obj_align(batt_shell, LV_ALIGN_RIGHT_MID, -4, 0);  // leave room for the nub
+    lv_obj_set_style_radius(batt_shell, 4, 0);
+    lv_obj_set_style_border_width(batt_shell, 2, 0);
+    lv_obj_set_style_border_color(batt_shell, COL_TEXT, 0);
+    lv_obj_set_style_pad_all(batt_shell, 2, 0);
+    lv_obj_clear_flag(batt_shell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(batt_shell, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_bar = lv_bar_create(batt_shell);
+    lv_obj_set_size(batt_bar, lv_pct(100), lv_pct(100));
+    lv_obj_center(batt_bar);
+    lv_bar_set_range(batt_bar, 0, 100);
+    lv_bar_set_value(batt_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_opa(batt_bar, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_radius(batt_bar, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(batt_bar, COL_GREEN, LV_PART_INDICATOR);
+    lv_obj_clear_flag(batt_bar, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_nub = lv_obj_create(batt_box);
+    lv_obj_remove_style_all(batt_nub);
+    lv_obj_set_size(batt_nub, 3, 8);
+    lv_obj_align(batt_nub, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_radius(batt_nub, 1, 0);
+    lv_obj_set_style_bg_color(batt_nub, COL_TEXT, 0);
+    lv_obj_set_style_bg_opa(batt_nub, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(batt_nub, LV_OBJ_FLAG_CLICKABLE);
+}
+
+void ui_set_battery(int pct, bool charging) {
+    if (!batt_box) return;
+    if (pct < 0) {                                   // no battery — hide entirely
+        lv_obj_add_flag(batt_box, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(batt_bar, pct, LV_ANIM_OFF);
+
+    lv_color_t col;
+    if      (charging)  col = COL_GREEN;
+    else if (pct <= 20) col = COL_RED;
+    else if (pct <= 50) col = COL_AMBER;
+    else                col = COL_GREEN;
+    lv_obj_set_style_bg_color(batt_bar, col, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(batt_label, charging ? COL_GREEN : COL_TEXT, 0);
+    lv_label_set_text_fmt(batt_label, "%d%%", pct);
+}
+
 void ui_init(void) {
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
@@ -684,6 +763,9 @@ void ui_init(void) {
     lv_obj_clear_flag(dim_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(dim_overlay, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(dim_overlay, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+    // Battery indicator lives on the top layer, above every screen + the dimmer.
+    init_battery_indicator();
 }
 
 void ui_update(const UsageData* data) {
