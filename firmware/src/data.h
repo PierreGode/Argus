@@ -29,6 +29,15 @@ struct UsageData {
     uint16_t github_prs;     // open PRs awaiting the user's review or owned by them
     bool github_enabled;     // true when the daemon has a PAT and is polling GH
 
+    // ---- CI/CD page (GitHub Actions; reuses the GitHub PAT) ----
+    bool ci_enabled;         // daemon is polling CI and the lookup succeeded
+    char ci_status[6];       // headline run: "ok"|"fail"|"run"|"wait"|"none"
+    char ci_repo[28];        // headline run repo (basename)
+    char ci_branch[24];      // headline run branch
+    char ci_workflow[28];    // headline run workflow name
+    uint16_t ci_failing;     // # of watched repos whose latest run failed
+    uint16_t ci_waiting;     // # waiting on approval / action (environment protection)
+
     // ---- Copilot page (requires Copilot Business org admin scope on the PAT) ----
     bool copilot_enabled;    // daemon has the org configured + last seat lookup ok
     char copilot_status[12]; // "active" | "idle" | "inactive" | "off"

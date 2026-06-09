@@ -84,7 +84,10 @@ DEFAULTS = {
     "brightness": 100,         # 10..100 — software dim overlay on the device
     "transport": "ble",        # "ble" | "usb"
     "poll_interval": 60,       # seconds between Anthropic API polls
-    "enabled_apps": ["usage", "today", "github", "copilot"],  # which tabs cycle on the device
+    "enabled_apps": ["usage", "today", "github", "ci", "copilot"],  # which screens cycle on the device
+    "ci_focus_success": False,  # auto-focus the CI screen when a watched run goes green (off — green is noisy)
+    "ci_focus_fail": True,      # auto-focus when a watched run fails
+    "ci_focus_action": True,    # auto-focus when a run needs approval / action (environment protection)
     "device_name": "Argus Controller",  # BLE name we advertise/scan for; rename so multiple Argus units don't collide
     "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
     "today_show_cost": True,   # Today screen: show the "API equiv." cost panel
@@ -98,6 +101,7 @@ APP_REGISTRY = [
     ("usage",   "Usage",   "Claude Code rate-limit + reset countdown."),
     ("today",   "Today",   "Cost, tokens, model split from your local Claude logs."),
     ("github",  "GitHub",  "Open issues + PRs waiting on you."),
+    ("ci",      "CI/CD",   "GitHub Actions workflow status across your recent repos."),
     ("copilot", "Copilot", "GitHub Copilot status, last activity, editor."),
 ]
 
@@ -905,6 +909,51 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             gl.addWidget(hint)
             gh.setLayout(gl)
             v.addWidget(gh)
+
+            # CI/CD (GitHub Actions) — its own device screen, with per-event
+            # auto-focus rules as sub-options under its enable checkbox.
+            ci = QGroupBox("CI/CD status (GitHub Actions)")
+            cil = QVBoxLayout()
+            cil.setSpacing(8)
+            cil.addLayout(self._app_visibility_row(
+                "ci", cfg, "Show CI/CD status on device"))
+
+            af = QLabel("Auto-focus the device on the CI/CD screen when:")
+            af.setObjectName("muted")
+            cil.addWidget(af)
+
+            self.chk_ci_focus_fail = QCheckBox("A workflow run fails")
+            self.chk_ci_focus_fail.setChecked(bool(cfg.get("ci_focus_fail", True)))
+            cil.addWidget(self.chk_ci_focus_fail)
+
+            self.chk_ci_focus_action = QCheckBox(
+                "A run needs approval / action (environment protection rule)")
+            self.chk_ci_focus_action.setChecked(bool(cfg.get("ci_focus_action", True)))
+            cil.addWidget(self.chk_ci_focus_action)
+
+            self.chk_ci_focus_success = QCheckBox("A workflow run succeeds")
+            self.chk_ci_focus_success.setChecked(bool(cfg.get("ci_focus_success", False)))
+            cil.addWidget(self.chk_ci_focus_success)
+
+            ci_hint = QLabel(
+                "Watches the latest run of your most recently pushed repos "
+                "(reuses the token above — needs Actions: read). Auto-focus only "
+                "fires while the CI/CD screen is enabled."
+            )
+            ci_hint.setObjectName("muted")
+            ci_hint.setWordWrap(True)
+            cil.addWidget(ci_hint)
+            ci.setLayout(cil)
+            v.addWidget(ci)
+
+            # Grey out the auto-focus sub-options unless CI/CD is enabled.
+            def _sync_ci(on: bool):
+                for w in (self.chk_ci_focus_fail, self.chk_ci_focus_action,
+                          self.chk_ci_focus_success):
+                    w.setEnabled(on)
+            self.chk_apps["ci"].toggled.connect(_sync_ci)
+            _sync_ci(self.chk_apps["ci"].isChecked())
+
             v.addStretch()
             return page
 
@@ -1027,6 +1076,9 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "pending_name":       pending_name,
                 "today_show_cost":    self.chk_today_cost.isChecked(),
                 "today_show_cache":   self.chk_today_cache.isChecked(),
+                "ci_focus_fail":      self.chk_ci_focus_fail.isChecked(),
+                "ci_focus_action":    self.chk_ci_focus_action.isChecked(),
+                "ci_focus_success":   self.chk_ci_focus_success.isChecked(),
             }
             save_config(new_cfg)
             if pending_name and pending_name != prev_pending:

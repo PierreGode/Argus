@@ -24,6 +24,7 @@ from claude_logs import aggregate as aggregate_today_stats
 from claude_logs import to_payload_fields as today_payload_fields
 import github_stats
 import copilot_stats
+import ci_stats
 import tray_ui
 from version import __version__
 
@@ -429,6 +430,11 @@ _CP_CACHE_TTL = 60
 _cp_prem_cache = {"at": 0.0, "data": None, "key_hash": None}
 _CP_PREM_CACHE_TTL = 300
 
+# CI/CD (GitHub Actions). Short TTL — build state changes fast and the user
+# wants to see a red/green flip promptly.
+_ci_cache = {"at": 0.0, "data": None, "token_hash": None}
+_CI_CACHE_TTL = 60
+
 
 def force_refresh() -> None:
     """Expire the GitHub / Copilot response caches so the very next poll
@@ -440,29 +446,35 @@ def force_refresh() -> None:
     _gh_cache["at"] = 0.0
     _cp_cache["at"] = 0.0
     _cp_prem_cache["at"] = 0.0
+    _ci_cache["at"] = 0.0
 
 # Snapshot of the last poll's "watch these for changes" counters. None means
 # "we haven't observed a baseline yet" — first run after a daemon restart
 # never triggers an auto-focus, so we don't yank the screen on every reboot.
 _focus_prev = {"gh_issues": None, "gh_prs": None}
+# Per-repo signature (run_id, status-code) from the last CI poll. Empty means no
+# baseline yet, so the first poll after a restart never fires a CI focus.
+_ci_focus_prev: dict = {}
 
 
-def _detect_focus(fields: dict) -> str | None:
+def _detect_focus(fields: dict, cfg: dict) -> str | None:
     """If something noteworthy changed since the last poll, return the screen
-    the device should auto-switch to. Currently:
+    the device should auto-switch to:
 
-        - New PR or new issue (count went up) → "github"
+        - A workflow needs approval / action  → "ci"   (highest priority)
+        - New PR or new issue (count went up)  → "github"
+        - A workflow just failed               → "ci"  (if enabled)
+        - A workflow just succeeded            → "ci"  (if enabled)
 
-    Updates `_focus_prev` in place so the next poll has a baseline.
+    Updates the baselines in place so the next poll has something to diff.
     """
-    focus = None
-
+    # ---- GitHub issue/PR deltas ----
+    github_changed = False
     if fields.get("ge"):
         gi = int(fields.get("gi", 0))
         gp = int(fields.get("gp", 0))
         if _focus_prev["gh_issues"] is not None and _focus_prev["gh_prs"] is not None:
-            if gp > _focus_prev["gh_prs"] or gi > _focus_prev["gh_issues"]:
-                focus = "github"
+            github_changed = gp > _focus_prev["gh_prs"] or gi > _focus_prev["gh_issues"]
         _focus_prev["gh_issues"] = gi
         _focus_prev["gh_prs"]    = gp
     else:
@@ -471,7 +483,37 @@ def _detect_focus(fields: dict) -> str | None:
         _focus_prev["gh_issues"] = None
         _focus_prev["gh_prs"]    = None
 
-    return focus
+    # ---- CI/CD run transitions ----
+    ci_fail = ci_success = ci_action = False
+    if fields.get("cie"):
+        runs = (_ci_cache.get("data") or {}).get("runs") or []
+        seen = set()
+        for run in runs:
+            repo = run["repo"]
+            seen.add(repo)
+            sig = (run.get("run_id"), run.get("code"))
+            prev = _ci_focus_prev.get(repo)
+            if prev is not None and prev != sig:
+                if   run["code"] == "fail": ci_fail = True
+                elif run["code"] == "ok":   ci_success = True
+                elif run["code"] == "wait": ci_action = True
+            _ci_focus_prev[repo] = sig
+        # Forget repos that dropped out of the watched set.
+        for repo in [r for r in _ci_focus_prev if r not in seen]:
+            del _ci_focus_prev[repo]
+    else:
+        _ci_focus_prev.clear()
+
+    # ---- Priority: action needed > new GitHub items > build failed > passed ----
+    if ci_action and cfg.get("ci_focus_action", True):
+        return "ci"
+    if github_changed:
+        return "github"
+    if ci_fail and cfg.get("ci_focus_fail", True):
+        return "ci"
+    if ci_success and cfg.get("ci_focus_success", False):
+        return "ci"
+    return None
 
 
 def _github_fields(cfg: dict) -> dict:
@@ -497,6 +539,43 @@ def _github_fields(cfg: dict) -> dict:
             return {"ge": False, "gi": 0, "gp": 0}
 
     return {"ge": True, "gi": d["issues"], "gp": d["prs"]}
+
+
+def _ci_enabled(cfg: dict) -> bool:
+    """CI/CD is on when the 'ci' screen is enabled (None = boot default = all)."""
+    apps = cfg.get("enabled_apps")
+    return apps is None or "ci" in apps
+
+
+def _ci_fields(cfg: dict) -> dict:
+    """Build the CI/CD block. Reuses the GitHub PAT (needs Actions: read).
+    Cached on its own short TTL. Returns {'cie': False} when disabled, tokenless,
+    or the lookup failed — the firmware then shows a hint on the CI screen."""
+    tok = cfg.get("github_token") or ""
+    if not tok or not _ci_enabled(cfg):
+        return {"cie": False}
+
+    now = time.time()
+    th = hash(tok)
+    if _ci_cache["data"] and _ci_cache["token_hash"] == th and (now - _ci_cache["at"]) < _CI_CACHE_TTL:
+        d = _ci_cache["data"]
+    else:
+        try:
+            d = ci_stats.fetch(tok)
+            _ci_cache.update({"at": now, "data": d, "token_hash": th})
+        except ci_stats.CIError as e:
+            log(f"CI fetch failed: {e}")
+            return {"cie": False}
+
+    return {
+        "cie": True,
+        "cis": d["status"],
+        "cir": d["repo"][:27],
+        "cib": d["branch"][:23],
+        "ciw": d["workflow"][:27],
+        "cif": int(d["failing"]),
+        "ciq": int(d["waiting"]),
+    }
 
 
 def _copilot_fields(cfg: dict) -> dict:
@@ -584,7 +663,7 @@ def _copilot_fields(cfg: dict) -> dict:
 
 # Order matters — this is the cycle order on the device. Add new apps here
 # (and to the firmware's name_to_screen() table + enum) to grow the list.
-ALL_APPS = ["usage", "today", "github", "copilot"]
+ALL_APPS = ["usage", "today", "github", "ci", "copilot"]
 
 
 def _apps_csv(cfg: dict) -> str:
@@ -740,6 +819,7 @@ def build_payload(api_token: str) -> str:
         log(f"Today stats failed: {e}")
 
     fields.update(_github_fields(cfg))
+    fields.update(_ci_fields(cfg))
     fields.update(_copilot_fields(cfg))
     fields["br"] = max(10, min(100, int(cfg.get("brightness", 100))))
     fields["apps"] = _apps_csv(cfg)
@@ -761,7 +841,7 @@ def build_payload(api_token: str) -> str:
     fields["md"]   = mood
     fields["evts"] = events
 
-    focus = _detect_focus(fields)
+    focus = _detect_focus(fields, cfg)
     if focus:
         fields["fc"] = focus
         log(f"Auto-focus → {focus}")
