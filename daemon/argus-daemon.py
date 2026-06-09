@@ -743,6 +743,10 @@ def build_payload(api_token: str) -> str:
     fields["br"] = max(10, min(100, int(cfg.get("brightness", 100))))
     fields["apps"] = _apps_csv(cfg)
 
+    # Today-screen element visibility (firmware defaults both to true if absent).
+    fields["tac"] = bool(cfg.get("today_show_cost", True))
+    fields["tch"] = bool(cfg.get("today_show_cache", True))
+
     # Desired BLE name. When a rename is pending we push the target so the device
     # adopts it; otherwise we keep asserting the current name (the firmware no-ops
     # when it already matches). _commit_pending_rename() promotes the target to

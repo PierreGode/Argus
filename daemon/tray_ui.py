@@ -87,6 +87,8 @@ DEFAULTS = {
     "enabled_apps": ["usage", "today", "github", "copilot"],  # which tabs cycle on the device
     "device_name": "Argus Controller",  # BLE name we advertise/scan for; rename so multiple Argus units don't collide
     "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
+    "today_show_cost": True,   # Today screen: show the "API equiv." cost panel
+    "today_show_cache": True,  # Today screen: show the cache-hit panel (model split always shows)
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
@@ -273,6 +275,15 @@ def set_status(state: str, label: str) -> None:
 def _snapshot_status() -> dict:
     with _STATUS_LOCK:
         return dict(_STATUS)
+
+
+def is_connected() -> bool:
+    """True when the worker currently reports a live device link (BLE or USB).
+    The "ok" status is only set on connect and cleared the moment a disconnect
+    is detected, so it's a reliable gate for actions that need a reachable
+    device — e.g. renaming, which must not change config while the device is
+    away (config and the device's advertised name would drift out of sync)."""
+    return _snapshot_status().get("state") == "ok"
 
 
 # ----- Brand / theme --------------------------------------------------------
@@ -639,13 +650,15 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             # settings). Each app gets a dedicated tab with its own
             # "Show on device" checkbox + app-specific config. Adding a new
             # app = append to APP_REGISTRY + add a _build_<app>_tab() below.
+            # The Usage + Today screens are both Claude data, so they share one
+            # "Claude" tab (with the Today screen's per-element toggles). GitHub
+            # and Copilot keep their own tabs.
             self.chk_apps = {}
             self.tabs = QTabWidget()
             self.tabs.addTab(self._build_system_tab(cfg), "System")
-            for name, label, _desc in APP_REGISTRY:
-                builder = getattr(self, f"_build_{name}_tab", None)
-                page = builder(cfg) if builder else self._build_app_tab(cfg, name)
-                self.tabs.addTab(page, label)
+            self.tabs.addTab(self._build_claude_tab(cfg), "Claude")
+            self.tabs.addTab(self._build_github_tab(cfg), "GitHub")
+            self.tabs.addTab(self._build_copilot_tab(cfg), "Copilot")
             root.addWidget(self.tabs)
 
             # --- Live log -----------------------------------------------
@@ -681,10 +694,11 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
         # app-specific config widget block. Toggle state lands in
         # self.chk_apps[name] for _on_save_clicked() to read uniformly.
 
-        def _app_visibility_row(self, name: str, cfg: dict) -> QHBoxLayout:
+        def _app_visibility_row(self, name: str, cfg: dict,
+                                label: str = "Show on device") -> QHBoxLayout:
             row = QHBoxLayout()
             row.setSpacing(10)
-            chk = QCheckBox("Show on device")
+            chk = QCheckBox(label)
             chk.setChecked(name in (cfg.get("enabled_apps") or []))
             chk.setToolTip(
                 "Unchecked apps are hidden from the device's screen cycle. "
@@ -733,13 +747,20 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             self.ed_name.setToolTip(
                 "The BLE name this Argus advertises and that the daemon searches "
                 "for. Give each device a unique name so multiple Argus units don't "
-                "collide. The rename is pushed once the daemon next connects; the "
-                "device then reconnects under the new name (it must be reachable "
-                "for the rename to take effect)."
+                "collide. The device must be connected to rename it — the new name "
+                "is pushed over the live link, then the device reconnects under it."
             )
             name_row.addWidget(self.ed_name)
             name_row.addStretch()
             cv.addLayout(name_row)
+
+            # Live gate: renaming requires a connected device, otherwise the
+            # saved name and the device's actual advertised name drift apart.
+            # _drain() flips this hint + the field's enabled state on connect.
+            self.lbl_name_hint = QLabel("Connect the device to change its name.")
+            self.lbl_name_hint.setObjectName("muted")
+            self.lbl_name_hint.setWordWrap(True)
+            cv.addWidget(self.lbl_name_hint)
 
             conn.setLayout(cv)
             v.addWidget(conn)
@@ -824,11 +845,57 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             v.addStretch()
             return page
 
-        def _build_usage_tab(self, cfg: dict) -> QWidget:
-            return self._build_app_tab(cfg, "usage")
+        def _build_claude_tab(self, cfg: dict) -> QWidget:
+            """Claude screens: which of the two Claude screens (Usage rate limits
+            / Today token spend) cycle on the device, plus per-element toggles
+            for the Today screen."""
+            page = QWidget()
+            v = QVBoxLayout(page)
+            v.setContentsMargins(8, 8, 8, 8)
+            v.setSpacing(12)
 
-        def _build_today_tab(self, cfg: dict) -> QWidget:
-            return self._build_app_tab(cfg, "today")
+            # Which Claude screens appear in the device's cycle.
+            screens = QGroupBox("SCREENS ON DEVICE")
+            sv = QVBoxLayout()
+            sv.setSpacing(8)
+            sv.addLayout(self._app_visibility_row(
+                "usage", cfg, "Usage — rate limits & reset countdowns"))
+            sv.addLayout(self._app_visibility_row(
+                "today", cfg, "Today — token spend, cache, model split"))
+            screens.setLayout(sv)
+            v.addWidget(screens)
+
+            # Per-element toggles for the Today screen.
+            elems = QGroupBox("TODAY SCREEN ELEMENTS")
+            ev = QVBoxLayout()
+            ev.setSpacing(8)
+            self.chk_today_cost = QCheckBox("API-equivalent cost")
+            self.chk_today_cost.setChecked(bool(cfg.get("today_show_cost", True)))
+            self.chk_today_cost.setToolTip(
+                "Show the 'API equiv.' panel (today's cost + the 7-day total) on "
+                "the Today screen."
+            )
+            ev.addWidget(self.chk_today_cost)
+            self.chk_today_cache = QCheckBox("Cache hit rate")
+            self.chk_today_cache.setChecked(bool(cfg.get("today_show_cache", True)))
+            self.chk_today_cache.setToolTip(
+                "Show the cache-hit % and bar on the Today screen. The model "
+                "split (Opus / Sonnet / Haiku) stays visible either way."
+            )
+            ev.addWidget(self.chk_today_cache)
+            hint = QLabel(
+                "Uncheck to hide that element from the Today screen; the rest "
+                "slides up to fill the space. The model split always shows. To "
+                "hide the whole screen, uncheck Today above."
+            )
+            hint.setObjectName("muted")
+            hint.setWordWrap(True)
+            ev.addWidget(hint)
+            elems.setLayout(ev)
+            v.addWidget(elems)
+
+            v.addStretch()
+            return page
 
         def _build_github_tab(self, cfg: dict) -> QWidget:
             page = QWidget()
@@ -948,20 +1015,41 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             )
             self.status_label.setText(s["label"])
 
+            # Gate the device-name field on connection so the user can't queue a
+            # rename against an absent device. Skip the toggle while the field is
+            # focused (mid-edit) so a transient BLE flap doesn't steal focus.
+            connected = s["state"] == "ok"
+            if hasattr(self, "ed_name") and not self.ed_name.hasFocus():
+                self.ed_name.setEnabled(connected)
+                self.lbl_name_hint.setVisible(not connected)
+
         def _on_save_clicked(self):
             interval = int(self.cb_interval.currentData() or 60)
             enabled = [name for name, _, _ in APP_REGISTRY
                        if self.chk_apps[name].isChecked()]
 
-            # Device-name rename handshake. We keep scanning under the CURRENT
-            # advertised name (device_name) until the daemon confirms the new one
-            # was delivered; the desired name rides along in pending_name. If the
-            # typed name matches the current one, there's nothing pending.
+            # Device-name rename — requires a connected device. We never change
+            # device_name at save time; the desired name rides in pending_name and
+            # the worker promotes it once the device confirms the push. Accepting a
+            # new name only while connected guarantees the saved name can't drift
+            # from the device's actual advertised name. The handshake still keeps
+            # scanning under the current name until the push is confirmed.
             prev = load_config()
             current_name = (prev.get("device_name") or "Argus Controller").strip() \
                 or "Argus Controller"
+            prev_pending = (prev.get("pending_name") or "").strip()
             typed = self.ed_name.text().strip() or "Argus Controller"
-            pending_name = "" if typed == current_name else typed
+            shown_on_open = prev_pending or current_name  # what the field showed on open
+
+            rename_blocked = False
+            if typed == shown_on_open:
+                pending_name = prev_pending               # unchanged — keep prior state
+            elif is_connected():
+                pending_name = "" if typed == current_name else typed
+            else:
+                pending_name = prev_pending               # refuse new name; revert field
+                rename_blocked = True
+                self.ed_name.setText(shown_on_open)
 
             new_cfg = {
                 "github_token":       self.ed_token.text().strip(),
@@ -974,11 +1062,17 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "enabled_apps":       enabled,
                 "device_name":        current_name,
                 "pending_name":       pending_name,
+                "today_show_cost":    self.chk_today_cost.isChecked(),
+                "today_show_cache":   self.chk_today_cache.isChecked(),
             }
             save_config(new_cfg)
-            if pending_name:
+            if rename_blocked:
                 self.log_view.appendPlainText(
-                    f"[ui] rename to '{pending_name}' queued — applies on next connect"
+                    "[ui] rename needs a connected device — connect first, then change the name"
+                )
+            elif pending_name and pending_name != prev_pending:
+                self.log_view.appendPlainText(
+                    f"[ui] renaming device to '{pending_name}' — pushing over the live link"
                 )
             if autostart_supported():
                 ok = set_autostart(self.chk_autostart.isChecked())
