@@ -39,8 +39,8 @@ struct UsageData {
     // historical "premium" prefix to keep the wire format stable.
     bool     copilot_premium_ok;
     float    copilot_premium_pct;       // 0.0 .. 100.0+
-    uint16_t copilot_premium_used;      // included AI credits consumed this month
-    uint16_t copilot_premium_allowance; // configured monthly included pool
+    uint32_t copilot_premium_used;      // included AI credits consumed this month
+    uint32_t copilot_premium_allowance; // configured monthly included pool (can exceed 65535)
     char     copilot_premium_scope[12]; // "org" or "enterprise"
     char     copilot_top_model[32];     // e.g. "GPT-5.4"
 
