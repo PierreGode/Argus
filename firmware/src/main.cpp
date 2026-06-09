@@ -8,6 +8,7 @@
 #include "splash.h"
 #include "touch.h"
 #include "usage_rate.h"
+#include "power.h"
 
 // Physical buttons (global, screen-independent):
 //   BTN_BACK   (GPIO 0)  — left,  send Space (Claude Code voice mode push-to-talk)
@@ -267,6 +268,9 @@ void setup() {
     // Init I2C for GPIO expander
     Wire.begin(EXPANDER_SDA, EXPANDER_SCL);
 
+    // AXP2101 PMU (battery gauge) on the same I2C bus. No-op if absent.
+    power_init();
+
     // Reset sequence via TCA9554 GPIO expander (same as HuginnESP)
     expander->pinMode(5, OUTPUT);
     expander->pinMode(6, OUTPUT);
@@ -320,6 +324,9 @@ void setup() {
     // Show initial BLE status on Bluetooth screen
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
 
+    // First battery paint (hidden if no battery is connected).
+    ui_set_battery(power_battery_pct(), power_is_charging());
+
     ui_show_screen(SCREEN_SPLASH);
 
     Serial.println("Dashboard ready, waiting for data on BLE...");
@@ -351,6 +358,16 @@ void loop() {
     if (bs != last_ble_state) {
         last_ble_state = bs;
         ui_update_ble_status(bs, ble_get_device_name(), ble_get_mac_address());
+    }
+
+    // Refresh the battery indicator a few times a minute (cheap I2C reads).
+    {
+        static uint32_t last_batt = 0;
+        if (millis() - last_batt > 5000) {
+            last_batt = millis();
+            power_tick();
+            ui_set_battery(power_battery_pct(), power_is_charging());
+        }
     }
 
     // Check for serial commands (screenshot, etc.)

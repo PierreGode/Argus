@@ -22,6 +22,11 @@ void ui_toggle_splash(void);
 screen_t ui_get_current_screen(void);
 void ui_update_ble_status(ble_state_t state, const char* name, const char* mac);
 
+// Update the top-right battery indicator. pct < 0 means "no battery detected"
+// and hides the indicator entirely; 0-100 shows it (green/amber/red by level,
+// green while charging). Lives on the top layer so it floats over every screen.
+void ui_set_battery(int pct, bool charging);
+
 // Set the visible-apps list from a CSV like "usage,today,github,copilot".
 // Apps NOT in the list are hidden from the cycle on the device but remain
 // available to ui_focus_by_name (the daemon's focus-request flow still
