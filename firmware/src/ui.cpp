@@ -60,11 +60,14 @@ static lv_obj_t* dim_overlay;
 
 // ---- Today screen widgets ----
 static lv_obj_t* today_container;
+static lv_obj_t* p_cost_panel;       // "API equiv." cost panel (toggle: today_show_cost)
 static lv_obj_t* lbl_today_cost;
 static lv_obj_t* lbl_today_week;
+static lv_obj_t* p_cache_panel;      // cache-hit panel; also hosts the model-split line
+static lv_obj_t* pill_today_cache;   // "Cache" pill (hidden with the cache toggle)
 static lv_obj_t* lbl_today_cache_pct;
 static lv_obj_t* bar_today_cache;
-static lv_obj_t* lbl_today_models;
+static lv_obj_t* lbl_today_models;   // Opus/Sonnet/Haiku split — kept visible even when cache is hidden
 
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
@@ -262,6 +265,7 @@ static void init_today_screen(lv_obj_t* scr) {
 
     // Panel 1 — cost today
     lv_obj_t* p_cost = make_panel(today_container, MARGIN, CONTENT_Y, CONTENT_W, PANEL_H);
+    p_cost_panel = p_cost;
     lbl_today_cost = lv_label_create(p_cost);
     lv_label_set_text(lbl_today_cost, "No data");
     lv_obj_set_style_text_font(lbl_today_cost, &font_styrene_48, 0);
@@ -283,6 +287,7 @@ static void init_today_screen(lv_obj_t* scr) {
     lv_obj_t* p_cache = make_panel(today_container, MARGIN,
                                    CONTENT_Y + PANEL_H + PANEL_GAP,
                                    CONTENT_W, PANEL_H);
+    p_cache_panel = p_cache;
     lbl_today_cache_pct = lv_label_create(p_cache);
     lv_label_set_text(lbl_today_cache_pct, "No data");
     lv_obj_set_style_text_font(lbl_today_cache_pct, &font_styrene_48, 0);
@@ -291,6 +296,7 @@ static void init_today_screen(lv_obj_t* scr) {
 
     lv_obj_t* pill_cache = make_pill(p_cache, "Cache");
     lv_obj_align(pill_cache, LV_ALIGN_TOP_RIGHT, 0, 1);
+    pill_today_cache = pill_cache;
 
     bar_today_cache = make_bar(p_cache, 0, 56, CONTENT_W - 32, 24);
 
@@ -304,6 +310,43 @@ static void init_today_screen(lv_obj_t* scr) {
     // init_usage_screen's lbl_usage_footer.)
 
     lv_obj_add_flag(today_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Apply the daemon's Today-screen element toggles. The cost ("API equiv.")
+// panel can be hidden entirely; the cache panel collapses to just the
+// model-split line (Opus/Sonnet/Haiku), which we always keep visible. Whatever
+// remains slides up to the top slot so there's never a gap.
+#define MODEL_PANEL_H 56
+
+static void today_apply_layout(bool show_cost, bool show_cache) {
+    int y = CONTENT_Y;
+
+    // Cost panel — hidden outright when off (its children hide with it).
+    if (show_cost) {
+        lv_obj_clear_flag(p_cost_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(p_cost_panel, y);
+        y += PANEL_H + PANEL_GAP;
+    } else {
+        lv_obj_add_flag(p_cost_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Cache panel stays present because it hosts the model-split line. When
+    // cache is off we hide the cache visuals and shrink the panel to one line.
+    lv_obj_clear_flag(p_cache_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_y(p_cache_panel, y);
+    if (show_cache) {
+        lv_obj_set_height(p_cache_panel, PANEL_H);
+        lv_obj_clear_flag(lbl_today_cache_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(bar_today_cache,     LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(pill_today_cache,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(lbl_today_models, 94);
+    } else {
+        lv_obj_set_height(p_cache_panel, MODEL_PANEL_H);
+        lv_obj_add_flag(lbl_today_cache_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(bar_today_cache,     LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(pill_today_cache,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(lbl_today_models, 0);
+    }
 }
 
 // ======== GitHub Screen (480x480) ========
@@ -649,6 +692,9 @@ void ui_update(const UsageData* data) {
                           (int)data->opus_pct,
                           (int)data->sonnet_pct,
                           (int)data->haiku_pct);
+
+    // Show/hide the cost + cache panels per the daemon's toggles.
+    today_apply_layout(data->today_show_cost, data->today_show_cache);
 
     char footer[64];
     const char* proj = (data->project[0] != '\0') ? data->project : "(no project)";

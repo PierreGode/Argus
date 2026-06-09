@@ -105,6 +105,11 @@ static bool parse_json(const char* json, UsageData* out) {
     out->sessions_today = doc["se"] | 0;
     strlcpy(out->project, doc["pj"] | "", sizeof(out->project));
 
+    // Today-screen element visibility. Default true so older daemons (which
+    // don't send these) keep showing everything.
+    out->today_show_cost  = doc["tac"] | true;
+    out->today_show_cache = doc["tch"] | true;
+
     // GitHub & brightness — all optional; defaults keep older daemons working.
     out->github_issues  = doc["gi"] | 0;
     out->github_prs     = doc["gp"] | 0;

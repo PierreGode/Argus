@@ -21,6 +21,8 @@ struct UsageData {
     uint32_t tokens_today;   // total tokens consumed today (input + output + cache_*)
     uint16_t sessions_today; // number of distinct conversation files touched today
     char project[28];        // basename of most-recently-active project
+    bool today_show_cost;    // show the "API equiv." cost panel on the Today screen
+    bool today_show_cache;   // show the cache-hit panel on the Today screen (model split always shows)
 
     // ---- GitHub page (optional — daemon only populates if a PAT is set) ----
     uint16_t github_issues;  // open issues assigned to the user
