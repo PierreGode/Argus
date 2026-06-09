@@ -34,6 +34,7 @@ DEVICE_NAME     = "Argus Controller"
 POLL_INTERVAL   = 60   # seconds between API polls
 RECONNECT_DELAY = 2    # seconds between reconnect attempts
 TICK            = 2    # seconds between connection-health checks inside the poll window
+BLE_FALLBACK_AFTER = 3 # consecutive BLE failures under a custom name before probing the default name
 
 def log(msg: str):
     ts = time.strftime("%H:%M:%S")
@@ -793,10 +794,25 @@ def _commit_pending_rename() -> None:
     tray_ui.save_config(cfg)
 
 
-async def find_device():
-    """Scan for the configured Argus BLE device by exact name."""
+def _adopt_device_name(name: str) -> None:
+    """Persist `name` as the device_name we scan for, clearing any pending
+    rename. Used when we reached the device via the default-name fallback (e.g.
+    a reflash wiped the persisted rename), so the saved name matches reality and
+    we stop burning scans on a name nothing advertises."""
+    cfg = tray_ui.load_config()
+    if (cfg.get("device_name") or "") != name or (cfg.get("pending_name") or ""):
+        prev = cfg.get("device_name") or ""
+        cfg["device_name"] = name
+        cfg["pending_name"] = ""
+        tray_ui.save_config(cfg)
+        log(f"Saved device name reset to '{name}' (was '{prev}')")
+
+
+async def find_device(name: str | None = None):
+    """Scan for an Argus BLE device by exact name. Defaults to the configured
+    name; callers pass an explicit name for the default-name fallback."""
     from bleak import BleakScanner
-    target = configured_device_name()
+    target = name or configured_device_name()
     log(f"Scanning for '{target}'...")
     devices = await BleakScanner.discover(timeout=10)
     for d in devices:
@@ -942,13 +958,25 @@ async def run_ble(demo_mode: bool, token,
             wake_event.clear()
         return fired
 
+    fail_count = 0
     while not _should_stop():
-        # Find device
-        tray_ui.set_status("warn", "BLE — scanning…")
-        device = await find_device()
+        # Find device. After BLE_FALLBACK_AFTER straight failures under a custom
+        # name, probe the factory-default name once — recovers from a config that
+        # points at a name the device no longer advertises (e.g. a reflash wiped
+        # the persisted rename). The probe consumes the streak either way, so we
+        # alternate back to the configured name rather than getting stuck.
+        target = configured_device_name()
+        probe_default = fail_count >= BLE_FALLBACK_AFTER and target != DEVICE_NAME
+        scan_name = DEVICE_NAME if probe_default else target
+        if probe_default:
+            log(f"Can't reach '{target}' after {fail_count} tries — probing default name '{DEVICE_NAME}'")
+
+        tray_ui.set_status("warn", f"BLE — scanning for '{scan_name}'…")
+        device = await find_device(scan_name)
         if not device:
-            log(f"Device not found, retrying in {RECONNECT_DELAY}s...")
-            tray_ui.set_status("warn", f"BLE — device not found, retrying in {RECONNECT_DELAY}s")
+            fail_count = 0 if probe_default else fail_count + 1
+            log(f"'{scan_name}' not found, retrying in {RECONNECT_DELAY}s...")
+            tray_ui.set_status("warn", f"BLE — '{scan_name}' not found, retrying in {RECONNECT_DELAY}s")
             await asyncio.sleep(RECONNECT_DELAY)
             continue
 
@@ -957,6 +985,10 @@ async def run_ble(demo_mode: bool, token,
             async with BleakClient(device.address, timeout=15) as client:
                 log(f"Connected to {device.address}")
                 tray_ui.set_status("ok", f"BLE — connected to {device.address}")
+                if probe_default:
+                    # Reached it under the default name → the saved name was stale.
+                    _adopt_device_name(DEVICE_NAME)
+                fail_count = 0
 
                 # Log discovered services for debugging
                 for svc in client.services:
@@ -1009,6 +1041,7 @@ async def run_ble(demo_mode: bool, token,
                         return
 
         except Exception as e:
+            fail_count = 0 if probe_default else fail_count + 1
             log(f"BLE error: {e}")
             tray_ui.set_status("err", f"BLE error: {e}")
 
