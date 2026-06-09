@@ -67,9 +67,27 @@ static void my_flush_cb(lv_display_t* disp, const lv_area_t* area, uint8_t* px_m
     lv_display_flush_ready(disp);
 }
 
+// ---- Power-save state ----
+// g_display_on tracks the backlight; g_last_activity_ms is the last time we saw
+// a meaningful change / touch / button. note_activity() resets the timer and
+// wakes the screen if it was blanked. Defined here so my_touch_cb can swallow
+// touches that occur while the screen is off (the touch only wakes it).
+static bool     g_display_on = true;
+static uint32_t g_last_activity_ms = 0;
+
+static void note_activity() {
+    g_last_activity_ms = millis();
+    if (!g_display_on) {
+        power_set_backlight(true);
+        g_display_on = true;
+    }
+}
+
 // LVGL touch callback — reads from the GT911 driver state updated by touch_poll().
 static void my_touch_cb(lv_indev_t* indev, lv_indev_data_t* data) {
-    if (touch_is_pressed()) {
+    // While the screen is blanked, ignore touches here — the first touch only
+    // wakes the display (handled in loop()), it must not also cycle a screen.
+    if (g_display_on && touch_is_pressed()) {
         data->point.x = touch_get_x();
         data->point.y = touch_get_y();
         data->state = LV_INDEV_STATE_PRESSED;
@@ -116,6 +134,11 @@ static bool parse_json(const char* json, UsageData* out) {
     out->github_prs     = doc["gp"] | 0;
     out->github_enabled = doc["ge"] | false;
     out->brightness     = doc["br"] | 100;
+
+    // Power save — disabled by default so older daemons keep the screen on.
+    out->power_save      = doc["ps"]  | false;
+    out->power_save_secs = doc["pst"] | 300;
+    out->changed         = doc["chg"] | false;
 
     // CI/CD (GitHub Actions). All optional — cie=false hides the data.
     out->ci_enabled = doc["cie"] | false;
@@ -257,6 +280,7 @@ static void handle_usb_usage_json(const char* line) {
     if (ui_focus_by_name(usage.focus_screen)) {
         Serial.printf("Auto-focused on %s\n", usage.focus_screen);
     }
+    if (usage.changed) note_activity();  // wake the screen on real changes
     Serial.println("USB_USAGE_OK");
 }
 
@@ -348,9 +372,35 @@ void loop() {
         bool back_now = (digitalRead(BTN_BACK) == LOW);
 
         if (back_now && !back_was) {
-            ui_cycle_screen();
+            // When the screen is blanked, the press only wakes it; otherwise it
+            // cycles. Either way it counts as activity.
+            if (g_display_on) ui_cycle_screen();
+            note_activity();
         }
         back_was = back_now;
+    }
+
+    // A touch counts as activity too (and wakes a blanked screen). The actual
+    // touch action while awake is handled by LVGL via my_touch_cb.
+    {
+        static bool touch_was = false;
+        bool touch_now = touch_is_pressed();
+        if (touch_now && !touch_was) note_activity();
+        touch_was = touch_now;
+    }
+
+    // Power save: blank the backlight after the configured idle timeout, and
+    // make sure it's on whenever power-save is off.
+    if (g_last_activity_ms == 0) g_last_activity_ms = millis();
+    if (usage.power_save) {
+        uint32_t timeout_ms = usage.power_save_secs * 1000UL;
+        if (g_display_on && timeout_ms && (millis() - g_last_activity_ms > timeout_ms)) {
+            power_set_backlight(false);
+            g_display_on = false;
+        }
+    } else if (!g_display_on) {
+        power_set_backlight(true);
+        g_display_on = true;
     }
 
     // Update BLE status on screen when state changes
@@ -388,6 +438,7 @@ void loop() {
             if (ui_focus_by_name(usage.focus_screen)) {
                 Serial.printf("Auto-focused on %s\n", usage.focus_screen);
             }
+            if (usage.changed) note_activity();  // wake the screen on real changes
             ble_send_ack();
         } else {
             ble_send_nack();

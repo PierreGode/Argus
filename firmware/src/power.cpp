@@ -26,6 +26,11 @@ void power_init(void) {
     pmu.enableBattVoltageMeasure();
     pmu.enableVbusVoltageMeasure();
     pmu.enableSystemVoltageMeasure();
+
+    // DLDO1 powers the LCD backlight on this board. It's on by default (EFUSE),
+    // but a prior power-save sleep followed by a soft reset would leave it off
+    // (the PMU isn't reset by ESP.restart), so force it on at boot.
+    pmu.enableDLDO1();
 }
 
 void power_tick(void) {}
@@ -40,6 +45,15 @@ int power_battery_pct(void) {
 
 bool power_is_charging(void) {
     return pmu_ok && pmu.isCharging();
+}
+
+// LCD backlight on the AXP2101 DLDO1 rail. Disabling it blanks the screen for
+// power-save; the panel logic + touch stay powered (other rails), so the device
+// keeps running and re-enabling DLDO1 brings the image straight back.
+void power_set_backlight(bool on) {
+    if (!pmu_ok) return;
+    if (on) pmu.enableDLDO1();
+    else    pmu.disableDLDO1();
 }
 
 // PWR-button IRQ isn't wired on this board; the BOOT button cycles screens.

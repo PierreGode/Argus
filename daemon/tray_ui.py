@@ -84,6 +84,7 @@ DEFAULTS = {
     "brightness": 100,         # 10..100 — software dim overlay on the device
     "transport": "ble",        # "ble" | "usb"
     "poll_interval": 60,       # seconds between Anthropic API polls
+    "power_save": False,       # blank the device LCD after an idle timeout (woken by changes/touch/button)
     "enabled_apps": ["usage", "today", "github", "ci", "copilot"],  # which screens cycle on the device
     "ci_focus_success": False,  # auto-focus the CI screen when a watched run goes green (off — green is noisy)
     "ci_focus_fail": True,      # auto-focus when a watched run fails
@@ -790,6 +791,9 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
 
             # Display
             disp = QGroupBox("DISPLAY")
+            dv = QVBoxLayout()
+            dv.setSpacing(10)
+
             dl = QHBoxLayout()
             dl.setSpacing(14)
             bright_lbl = QLabel("Brightness")
@@ -807,7 +811,20 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             )
             dl.addWidget(self.sl_bright, stretch=1)
             dl.addWidget(self.lbl_bright)
-            disp.setLayout(dl)
+            dv.addLayout(dl)
+
+            # Power save — blank the LCD after an idle period.
+            self.chk_power_save = QCheckBox("Power save (turn the screen off when idle)")
+            self.chk_power_save.setChecked(bool(cfg.get("power_save", False)))
+            self.chk_power_save.setToolTip(
+                "Blanks the device's LCD backlight after ~5 minutes with no "
+                "changes (or poll interval + 1 min, whichever is longer). It "
+                "wakes on any Claude / GitHub / Copilot change, a screen touch, "
+                "or a button press."
+            )
+            dv.addWidget(self.chk_power_save)
+
+            disp.setLayout(dv)
             v.addWidget(disp)
 
             v.addStretch()
@@ -1071,6 +1088,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "brightness":         int(self.sl_bright.value()),
                 "transport":          "usb" if self.rb_usb.isChecked() else "ble",
                 "poll_interval":      max(5, interval),
+                "power_save":         self.chk_power_save.isChecked(),
                 "enabled_apps":       enabled,
                 "device_name":        current_name,
                 "pending_name":       pending_name,

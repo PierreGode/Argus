@@ -171,7 +171,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
   "cpr": true, "cpp": 60.4, "cpu": 1812, "cpa": 3000, "cpsu": "org", "cpm": "GPT-5.4",
   "apps": "usage,today,github,copilot", "tac": true, "tch": true,
   "md": "flirt", "evts": ["Claude weekly: 87% - resets in 2d", "New PR - awaiting review (total 2)"],
-  "br": 80, "fc": "github", "nm": "Argus Controller"
+  "br": 80, "fc": "github", "nm": "Argus Controller",
+  "ps": true, "pst": 360, "chg": false
 }
 ```
 
@@ -197,6 +198,7 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 | `br` | display brightness, 10–100 |
 | `fc` | auto-focus target — `splash`/`usage`/`today`/`github`/`ci`/`copilot`/`bluetooth`; present only on the poll where a change was detected |
 | `nm` | desired BLE device name — the device persists it to NVS and re-advertises under it; lets multiple Argus units coexist without name collisions |
+| `ps` / `pst` / `chg` | power-save enabled / idle timeout (s, poll-aware) / "substantive change this poll" wake flag — the device blanks the LCD (AXP2101 DLDO1) after `pst` idle, waking on `chg`, touch, or button |
 
 ## Web flasher build pipeline
 
