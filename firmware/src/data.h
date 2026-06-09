@@ -64,6 +64,15 @@ struct UsageData {
     // ---- Display ----
     uint8_t brightness;      // 0-100 (software dim overlay; 100 = full bright)
 
+    // ---- Power save ----
+    // When enabled, the firmware blanks the LCD backlight (AXP2101 DLDO1) after
+    // power_save_secs of no activity. "Activity" = a meaningful data change
+    // (the daemon's `changed` flag), a touch, or a button press. The daemon
+    // computes the timeout (poll-aware: max(5min, poll_interval + 1min)).
+    bool     power_save;        // master enable
+    uint32_t power_save_secs;   // idle timeout in seconds
+    bool     changed;           // daemon flagged a substantive change this poll
+
     // ---- Auto-focus ----
     // Daemon sets this to a screen name ("github", "today", "usage", …) when
     // something noteworthy changed (new PR, etc.). Firmware switches to that

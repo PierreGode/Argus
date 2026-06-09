@@ -847,6 +847,30 @@ def _fit_payload(fields: dict) -> str:
     return s
 
 
+# Signature of the last poll's substantive values, for power-save wake. None =
+# no baseline yet.
+_last_change_sig = None
+
+
+def _changed_since_last(fields: dict) -> bool:
+    """True when a substantive value changed since the previous poll. Used by the
+    device to wake from power-save. Deliberately ignores time-decay fields (reset
+    countdowns, "x min ago", the events strip) that tick every poll — otherwise
+    an idle device would never sleep. The first poll counts as changed so the
+    screen starts on."""
+    global _last_change_sig
+    sig = (
+        fields.get("s"), fields.get("w"),                          # Claude caps
+        fields.get("gi"), fields.get("gp"),                        # GitHub issues / PRs
+        fields.get("cps"), fields.get("cpu"),                      # Copilot status / credits used
+        fields.get("cis"), fields.get("cif"), fields.get("ciq"),   # CI status / failing / waiting
+        fields.get("tk"), fields.get("c"),                         # today's tokens / cost
+    )
+    changed = _last_change_sig is None or sig != _last_change_sig
+    _last_change_sig = sig
+    return changed
+
+
 def build_payload(api_token: str) -> str:
     """Combine rate-limit headers, today's local-log stats, GitHub counts, and
     brightness into one JSON line. Reads config.json on every call so the
@@ -874,6 +898,14 @@ def build_payload(api_token: str) -> str:
     # Today-screen element visibility (firmware defaults both to true if absent).
     fields["tac"] = bool(cfg.get("today_show_cost", True))
     fields["tch"] = bool(cfg.get("today_show_cache", True))
+
+    # Power save: master switch + poll-aware idle timeout + a "changed" flag the
+    # device uses to wake. Timeout is at least 5 min, or poll_interval + 1 min
+    # when polls are slower than that (so a poll always lands before sleep).
+    poll = int(cfg.get("poll_interval", POLL_INTERVAL))
+    fields["ps"]  = bool(cfg.get("power_save", False))
+    fields["pst"] = max(300, poll + 60)
+    fields["chg"] = _changed_since_last(fields)
 
     # Desired BLE name. When a rename is pending we push the target so the device
     # adopts it; otherwise we keep asserting the current name (the firmware no-ops
