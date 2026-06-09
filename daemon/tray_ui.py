@@ -277,15 +277,6 @@ def _snapshot_status() -> dict:
         return dict(_STATUS)
 
 
-def is_connected() -> bool:
-    """True when the worker currently reports a live device link (BLE or USB).
-    The "ok" status is only set on connect and cleared the moment a disconnect
-    is detected, so it's a reliable gate for actions that need a reachable
-    device — e.g. renaming, which must not change config while the device is
-    away (config and the device's advertised name would drift out of sync)."""
-    return _snapshot_status().get("state") == "ok"
-
-
 # ----- Brand / theme --------------------------------------------------------
 
 BG_DARK     = "#15110d"
@@ -747,20 +738,12 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             self.ed_name.setToolTip(
                 "The BLE name this Argus advertises and that the daemon searches "
                 "for. Give each device a unique name so multiple Argus units don't "
-                "collide. The device must be connected to rename it — the new name "
-                "is pushed over the live link, then the device reconnects under it."
+                "collide. The new name is pushed the next time the daemon connects, "
+                "then the device reconnects under it."
             )
             name_row.addWidget(self.ed_name)
             name_row.addStretch()
             cv.addLayout(name_row)
-
-            # Live gate: renaming requires a connected device, otherwise the
-            # saved name and the device's actual advertised name drift apart.
-            # _drain() flips this hint + the field's enabled state on connect.
-            self.lbl_name_hint = QLabel("Connect the device to change its name.")
-            self.lbl_name_hint.setObjectName("muted")
-            self.lbl_name_hint.setWordWrap(True)
-            cv.addWidget(self.lbl_name_hint)
 
             conn.setLayout(cv)
             v.addWidget(conn)
@@ -1015,41 +998,21 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             )
             self.status_label.setText(s["label"])
 
-            # Gate the device-name field on connection so the user can't queue a
-            # rename against an absent device. Skip the toggle while the field is
-            # focused (mid-edit) so a transient BLE flap doesn't steal focus.
-            connected = s["state"] == "ok"
-            if hasattr(self, "ed_name") and not self.ed_name.hasFocus():
-                self.ed_name.setEnabled(connected)
-                self.lbl_name_hint.setVisible(not connected)
-
         def _on_save_clicked(self):
             interval = int(self.cb_interval.currentData() or 60)
             enabled = [name for name, _, _ in APP_REGISTRY
                        if self.chk_apps[name].isChecked()]
 
-            # Device-name rename — requires a connected device. We never change
-            # device_name at save time; the desired name rides in pending_name and
-            # the worker promotes it once the device confirms the push. Accepting a
-            # new name only while connected guarantees the saved name can't drift
-            # from the device's actual advertised name. The handshake still keeps
-            # scanning under the current name until the push is confirmed.
+            # Device-name rename. We never change device_name at save time; the
+            # desired name rides in pending_name and the worker promotes it once a
+            # payload carrying it has been delivered. Queueing works whether or not
+            # the device is currently connected — it applies on the next connect.
             prev = load_config()
             current_name = (prev.get("device_name") or "Argus Controller").strip() \
                 or "Argus Controller"
             prev_pending = (prev.get("pending_name") or "").strip()
             typed = self.ed_name.text().strip() or "Argus Controller"
-            shown_on_open = prev_pending or current_name  # what the field showed on open
-
-            rename_blocked = False
-            if typed == shown_on_open:
-                pending_name = prev_pending               # unchanged — keep prior state
-            elif is_connected():
-                pending_name = "" if typed == current_name else typed
-            else:
-                pending_name = prev_pending               # refuse new name; revert field
-                rename_blocked = True
-                self.ed_name.setText(shown_on_open)
+            pending_name = "" if typed == current_name else typed
 
             new_cfg = {
                 "github_token":       self.ed_token.text().strip(),
@@ -1066,13 +1029,9 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "today_show_cache":   self.chk_today_cache.isChecked(),
             }
             save_config(new_cfg)
-            if rename_blocked:
+            if pending_name and pending_name != prev_pending:
                 self.log_view.appendPlainText(
-                    "[ui] rename needs a connected device — connect first, then change the name"
-                )
-            elif pending_name and pending_name != prev_pending:
-                self.log_view.appendPlainText(
-                    f"[ui] renaming device to '{pending_name}' — pushing over the live link"
+                    f"[ui] rename to '{pending_name}' queued — applies on the next connect"
                 )
             if autostart_supported():
                 ok = set_autostart(self.chk_autostart.isChecked())
