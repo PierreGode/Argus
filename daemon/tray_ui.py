@@ -85,6 +85,8 @@ DEFAULTS = {
     "transport": "ble",        # "ble" | "usb"
     "poll_interval": 60,       # seconds between Anthropic API polls
     "enabled_apps": ["usage", "today", "github", "copilot"],  # which tabs cycle on the device
+    "device_name": "Argus Controller",  # BLE name we advertise/scan for; rename so multiple Argus units don't collide
+    "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
@@ -702,18 +704,44 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
 
             # Connection
             conn = QGroupBox("CONNECTION")
-            cl = QHBoxLayout()
-            cl.setSpacing(24)
+            cv = QVBoxLayout()
+            cv.setSpacing(12)
+
+            radios = QHBoxLayout()
+            radios.setSpacing(24)
             self.rb_ble = QRadioButton("Bluetooth (auto-discover)")
             self.rb_usb = QRadioButton("USB-C serial (auto-detect)")
             grp = QButtonGroup(self)
             grp.addButton(self.rb_ble)
             grp.addButton(self.rb_usb)
             (self.rb_usb if cfg["transport"] == "usb" else self.rb_ble).setChecked(True)
-            cl.addWidget(self.rb_ble)
-            cl.addWidget(self.rb_usb)
-            cl.addStretch()
-            conn.setLayout(cl)
+            radios.addWidget(self.rb_ble)
+            radios.addWidget(self.rb_usb)
+            radios.addStretch()
+            cv.addLayout(radios)
+
+            # Device name — lets a user with several Argus units give each a
+            # unique BLE name so the daemon doesn't grab the wrong one. Shows the
+            # pending rename target if one is in flight, else the live name.
+            name_row = QHBoxLayout()
+            name_row.setSpacing(14)
+            name_row.addWidget(QLabel("Device name"))
+            self.ed_name = QLineEdit(
+                cfg.get("pending_name") or cfg.get("device_name") or "Argus Controller")
+            self.ed_name.setMaxLength(24)
+            self.ed_name.setPlaceholderText("Argus Controller")
+            self.ed_name.setToolTip(
+                "The BLE name this Argus advertises and that the daemon searches "
+                "for. Give each device a unique name so multiple Argus units don't "
+                "collide. The rename is pushed once the daemon next connects; the "
+                "device then reconnects under the new name (it must be reachable "
+                "for the rename to take effect)."
+            )
+            name_row.addWidget(self.ed_name)
+            name_row.addStretch()
+            cv.addLayout(name_row)
+
+            conn.setLayout(cv)
             v.addWidget(conn)
 
             # Behavior
@@ -924,6 +952,17 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             interval = int(self.cb_interval.currentData() or 60)
             enabled = [name for name, _, _ in APP_REGISTRY
                        if self.chk_apps[name].isChecked()]
+
+            # Device-name rename handshake. We keep scanning under the CURRENT
+            # advertised name (device_name) until the daemon confirms the new one
+            # was delivered; the desired name rides along in pending_name. If the
+            # typed name matches the current one, there's nothing pending.
+            prev = load_config()
+            current_name = (prev.get("device_name") or "Argus Controller").strip() \
+                or "Argus Controller"
+            typed = self.ed_name.text().strip() or "Argus Controller"
+            pending_name = "" if typed == current_name else typed
+
             new_cfg = {
                 "github_token":       self.ed_token.text().strip(),
                 "copilot_org":        self.ed_copilot_org.text().strip(),
@@ -933,8 +972,14 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "transport":          "usb" if self.rb_usb.isChecked() else "ble",
                 "poll_interval":      max(5, interval),
                 "enabled_apps":       enabled,
+                "device_name":        current_name,
+                "pending_name":       pending_name,
             }
             save_config(new_cfg)
+            if pending_name:
+                self.log_view.appendPlainText(
+                    f"[ui] rename to '{pending_name}' queued — applies on next connect"
+                )
             if autostart_supported():
                 ok = set_autostart(self.chk_autostart.isChecked())
                 if not ok:

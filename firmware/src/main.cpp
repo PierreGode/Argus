@@ -151,6 +151,14 @@ static bool parse_json(const char* json, UsageData* out) {
         }
     }
 
+    // Optional device rename pushed by the daemon ("nm"). Persisted to NVS and
+    // applied to BLE here because parse_json is the single chokepoint for both
+    // the BLE and USB payloads. ble_set_device_name() no-ops when unchanged.
+    const char* nm = doc["nm"] | "";
+    if (nm[0] && ble_set_device_name(nm)) {
+        ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
+    }
+
     out->valid = true;
     return true;
 }

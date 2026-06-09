@@ -169,8 +169,8 @@ Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recogniz
   "cp": true, "cps": "active", "cpw": "5 min ago", "cpe": "VS Code",
   "cpr": true, "cpp": 60.4, "cpu": 1812, "cpa": 3000, "cpsu": "org", "cpm": "GPT-5.4",
   "apps": "usage,today,github,copilot",
-  "md": "flirt", "evts": ["Claude weekly: 87% · resets in 2d", "New PR · awaiting review (total 2)"],
-  "br": 80, "fc": "github"
+  "md": "flirt", "evts": ["Claude weekly: 87% - resets in 2d", "New PR - awaiting review (total 2)"],
+  "br": 80, "fc": "github", "nm": "Argus Controller"
 }
 ```
 
@@ -191,6 +191,7 @@ Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recogniz
 | `md` / `evts` | splash mascot mood / rotating events strip (array of strings) |
 | `br` | display brightness, 10–100 |
 | `fc` | auto-focus target — `splash`/`usage`/`today`/`github`/`copilot`/`bluetooth`; present only on the poll where a change was detected |
+| `nm` | desired BLE device name — the device persists it to NVS and re-advertises under it; lets multiple Argus units coexist without name collisions |
 
 ## Web flasher build pipeline
 

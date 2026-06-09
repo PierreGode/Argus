@@ -731,6 +731,14 @@ def build_payload(api_token: str) -> str:
     fields["br"] = max(10, min(100, int(cfg.get("brightness", 100))))
     fields["apps"] = _apps_csv(cfg)
 
+    # Desired BLE name. When a rename is pending we push the target so the device
+    # adopts it; otherwise we keep asserting the current name (the firmware no-ops
+    # when it already matches). _commit_pending_rename() promotes the target to
+    # device_name once a payload carrying it has been delivered.
+    device_name = (cfg.get("device_name") or DEVICE_NAME).strip() or DEVICE_NAME
+    pending = (cfg.get("pending_name") or "").strip()
+    fields["nm"] = pending or device_name
+
     # Mood-driven splash expression + rotating event strip.
     mood, events = _mood_and_events(fields)
     fields["md"]   = mood
@@ -743,13 +751,40 @@ def build_payload(api_token: str) -> str:
 
     return json.dumps(fields, separators=(",", ":"))
 
+def configured_device_name() -> str:
+    """The BLE name the device currently advertises and we scan for. Falls back
+    to the factory default. Note this is intentionally NOT the pending rename
+    target — we keep scanning under the current name until a rename is confirmed
+    delivered (see _commit_pending_rename)."""
+    name = (tray_ui.load_config().get("device_name") or DEVICE_NAME).strip()
+    return name or DEVICE_NAME
+
+
+def _commit_pending_rename() -> None:
+    """Promote a pending rename to the live device name. Call this only AFTER a
+    payload carrying the pending name (`nm`) has been delivered, so the device
+    has actually adopted it. Until then we keep scanning under the old name, so
+    a dropped link mid-rename never leaves us hunting for a name no device
+    advertises yet."""
+    cfg = tray_ui.load_config()
+    pending = (cfg.get("pending_name") or "").strip()
+    if not pending:
+        return
+    if pending != (cfg.get("device_name") or "").strip():
+        cfg["device_name"] = pending
+        log(f"Device renamed to '{pending}' — will reconnect under the new name")
+    cfg["pending_name"] = ""
+    tray_ui.save_config(cfg)
+
+
 async def find_device():
-    """Scan for the Argus Controller BLE device."""
+    """Scan for the configured Argus BLE device by exact name."""
     from bleak import BleakScanner
-    log(f"Scanning for '{DEVICE_NAME}'...")
+    target = configured_device_name()
+    log(f"Scanning for '{target}'...")
     devices = await BleakScanner.discover(timeout=10)
     for d in devices:
-        if d.name and DEVICE_NAME in d.name:
+        if d.name and d.name == target:
             log(f"Found: {d.name} [{d.address}]")
             return d
     return None
@@ -816,6 +851,7 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                         log(f"Sending: {payload}")
                         ser.write((payload + "\n").encode("utf-8"))
                         ser.flush()
+                        _commit_pending_rename()
                     except httpx.HTTPError as e:
                         log(f"API error: {e}")
                     except (serial.SerialException, OSError) as e:
@@ -929,6 +965,7 @@ async def run_ble(demo_mode: bool, token,
                             response=True
                         )
                         log("Sent OK")
+                        _commit_pending_rename()
                     except httpx.HTTPError as e:
                         log(f"API error: {e}")
                     except Exception as e:
