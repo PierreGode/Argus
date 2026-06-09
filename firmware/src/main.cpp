@@ -116,6 +116,15 @@ static bool parse_json(const char* json, UsageData* out) {
     out->github_enabled = doc["ge"] | false;
     out->brightness     = doc["br"] | 100;
 
+    // CI/CD (GitHub Actions). All optional — cie=false hides the data.
+    out->ci_enabled = doc["cie"] | false;
+    strlcpy(out->ci_status,   doc["cis"] | "none", sizeof(out->ci_status));
+    strlcpy(out->ci_repo,     doc["cir"] | "",     sizeof(out->ci_repo));
+    strlcpy(out->ci_branch,   doc["cib"] | "",     sizeof(out->ci_branch));
+    strlcpy(out->ci_workflow, doc["ciw"] | "",     sizeof(out->ci_workflow));
+    out->ci_failing = doc["cif"] | 0;
+    out->ci_waiting = doc["ciq"] | 0;
+
     // Auto-focus request — daemon sets "fc" only on the poll where it detects
     // a noteworthy change. Default empty so non-event payloads don't switch.
     strlcpy(out->focus_screen, doc["fc"] | "", sizeof(out->focus_screen));

@@ -166,6 +166,7 @@ Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recogniz
   "c": 3.47, "cw": 12.30, "mo": 45, "ms": 50, "mh": 5,
   "ch": 82, "tk": 234567, "se": 3, "pj": "argus",
   "ge": true, "gi": 4, "gp": 2,
+  "cie": true, "cis": "fail", "cir": "argus", "cib": "main", "ciw": "build", "cif": 1, "ciq": 0,
   "cp": true, "cps": "active", "cpw": "5 min ago", "cpe": "VS Code",
   "cpr": true, "cpp": 60.4, "cpu": 1812, "cpa": 3000, "cpsu": "org", "cpm": "GPT-5.4",
   "apps": "usage,today,github,copilot", "tac": true, "tch": true,
@@ -184,6 +185,9 @@ Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recogniz
 | `ch` / `tk` / `se` | cache hit rate % / tokens today / distinct sessions today |
 | `pj` | most recently active project (basename) |
 | `ge` / `gi` / `gp` | GitHub enabled / open issues assigned / open PRs awaiting you |
+| `cie` / `cis` | CI enabled / headline run status (`ok`/`fail`/`run`/`wait`/`none`) |
+| `cir` / `cib` / `ciw` | CI headline run repo / branch / workflow name |
+| `cif` / `ciq` | CI runs failing / waiting on approval (across watched repos) |
 | `cp` / `cps` / `cpw` / `cpe` | Copilot enabled / seat status / last-activity / editor |
 | `cpr` / `cpp` / `cpu` / `cpa` | AI-credit data present / used % / credits used / monthly allowance |
 | `cpsu` / `cpm` | AI-credit scope (`org`/`enterprise`) / top model name |
@@ -191,7 +195,7 @@ Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recogniz
 | `tac` / `tch` | Today screen: show the API-equivalent cost panel / the cache-hit panel (model split always shows) |
 | `md` / `evts` | splash mascot mood / rotating events strip (array of strings) |
 | `br` | display brightness, 10–100 |
-| `fc` | auto-focus target — `splash`/`usage`/`today`/`github`/`copilot`/`bluetooth`; present only on the poll where a change was detected |
+| `fc` | auto-focus target — `splash`/`usage`/`today`/`github`/`ci`/`copilot`/`bluetooth`; present only on the poll where a change was detected |
 | `nm` | desired BLE device name — the device persists it to NVS and re-advertises under it; lets multiple Argus units coexist without name collisions |
 
 ## Web flasher build pipeline

@@ -53,6 +53,14 @@ static lv_obj_t* lbl_gh_issues;
 static lv_obj_t* lbl_gh_prs;
 static lv_obj_t* lbl_gh_status;
 
+// ---- CI/CD screen widgets ----
+static lv_obj_t* ci_container;
+static lv_obj_t* lbl_ci_status;    // big headline word: PASSING / FAILING / RUNNING / ACTION / —
+static lv_obj_t* lbl_ci_repo;      // "repo · branch" of the headline run
+static lv_obj_t* lbl_ci_failing;   // big failing-run count
+static lv_obj_t* lbl_ci_waiting;   // "N waiting approval" sub-line
+static lv_obj_t* lbl_ci_hint;      // workflow name / token hint at the bottom
+
 // ---- Brightness dim overlay (full-screen semi-transparent rect on top) ----
 // Sits above every screen, intercepts no events, opacity is set from the
 // daemon's brightness field. 0 = pitch black, 100 = invisible.
@@ -416,6 +424,74 @@ static void init_github_screen(lv_obj_t* scr) {
     lv_obj_add_flag(github_container, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ======== CI/CD Screen (480x480) ========
+//
+// GitHub Actions across the user's recently-pushed repos. Panel 1 = a big
+// headline status word for the most noteworthy run (waiting > failing > newest)
+// with its repo/branch; Panel 2 = the failing count + a "waiting approval"
+// line; the bottom line shows the workflow name or a hint. Fed by the daemon's
+// "ci_*" payload fields.
+static void init_ci_screen(lv_obj_t* scr) {
+    ci_container = lv_obj_create(scr);
+    lv_obj_set_size(ci_container, SCR_W, SCR_H);
+    lv_obj_set_pos(ci_container, 0, 0);
+    lv_obj_set_style_bg_opa(ci_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ci_container, 0, 0);
+    lv_obj_set_style_pad_all(ci_container, 0, 0);
+    lv_obj_clear_flag(ci_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ci_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* lbl_title = lv_label_create(ci_container);
+    lv_label_set_text(lbl_title, "CI/CD");
+    lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
+    lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
+
+    // Panel 1 — headline status word + repo/branch
+    lv_obj_t* p_status = make_panel(ci_container, MARGIN, CONTENT_Y, CONTENT_W, PANEL_H);
+    lbl_ci_status = lv_label_create(p_status);
+    lv_label_set_text(lbl_ci_status, "No data");
+    lv_obj_set_style_text_font(lbl_ci_status, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_ci_status, COL_TEXT, 0);
+    lv_obj_set_pos(lbl_ci_status, 0, 0);
+
+    lv_obj_t* pill_status = make_pill(p_status, "Build");
+    lv_obj_align(pill_status, LV_ALIGN_TOP_RIGHT, 0, 1);
+
+    lbl_ci_repo = lv_label_create(p_status);
+    lv_label_set_text(lbl_ci_repo, "");
+    lv_obj_set_style_text_font(lbl_ci_repo, &font_styrene_28, 0);
+    lv_obj_set_style_text_color(lbl_ci_repo, COL_DIM, 0);
+    lv_obj_set_pos(lbl_ci_repo, 0, 94);
+
+    // Panel 2 — failing count + waiting line
+    lv_obj_t* p_fail = make_panel(ci_container, MARGIN,
+                                  CONTENT_Y + PANEL_H + PANEL_GAP,
+                                  CONTENT_W, PANEL_H);
+    lbl_ci_failing = lv_label_create(p_fail);
+    lv_label_set_text(lbl_ci_failing, "0");
+    lv_obj_set_style_text_font(lbl_ci_failing, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_ci_failing, COL_TEXT, 0);
+    lv_obj_set_pos(lbl_ci_failing, 0, 0);
+
+    lv_obj_t* pill_fail = make_pill(p_fail, "Failing");
+    lv_obj_align(pill_fail, LV_ALIGN_TOP_RIGHT, 0, 1);
+
+    lbl_ci_waiting = lv_label_create(p_fail);
+    lv_label_set_text(lbl_ci_waiting, "");
+    lv_obj_set_style_text_font(lbl_ci_waiting, &font_styrene_28, 0);
+    lv_obj_set_style_text_color(lbl_ci_waiting, COL_DIM, 0);
+    lv_obj_set_pos(lbl_ci_waiting, 0, 94);
+
+    lbl_ci_hint = lv_label_create(ci_container);
+    lv_label_set_text(lbl_ci_hint, "Enable CI/CD in the daemon settings");
+    lv_obj_set_style_text_font(lbl_ci_hint, &font_styrene_24, 0);
+    lv_obj_set_style_text_color(lbl_ci_hint, COL_DIM, 0);
+    lv_obj_align(lbl_ci_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+
+    lv_obj_add_flag(ci_container, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ======== Copilot Screen (480x480) ========
 //
 // One-panel layout: big status word (ACTIVE / IDLE / INACTIVE / OFF), relative
@@ -586,6 +662,7 @@ void ui_init(void) {
     init_usage_screen(scr);
     init_today_screen(scr);
     init_github_screen(scr);
+    init_ci_screen(scr);
     init_copilot_screen(scr);
     init_bluetooth_screen(scr);
     splash_init(scr);
@@ -630,6 +707,11 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_gh_issues,       "No data");
         lv_label_set_text(lbl_gh_prs,          "No data");
         lv_label_set_text(lbl_gh_status,       "Waiting for daemon");
+        lv_label_set_text(lbl_ci_status,       "No data");
+        lv_label_set_text(lbl_ci_repo,         "");
+        lv_label_set_text(lbl_ci_failing,      "0");
+        lv_label_set_text(lbl_ci_waiting,      "");
+        lv_label_set_text(lbl_ci_hint,         "Waiting for daemon");
         lv_label_set_text(lbl_cp_premium_pct,    "—");
         lv_label_set_text(lbl_cp_premium_counts, "");
         lv_label_set_text(lbl_cp_scope_pill,     "");
@@ -719,6 +801,50 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_gh_issues, "No data");
         lv_label_set_text(lbl_gh_prs,    "No data");
         lv_label_set_text(lbl_gh_status, "Set a token in the daemon settings");
+    }
+
+    // ---- CI/CD screen ----
+    if (data->ci_enabled) {
+        const char* code = data->ci_status;
+        const char* word;
+        lv_color_t col;
+        if      (strcmp(code, "ok")   == 0) { word = "Passing"; col = COL_GREEN; }
+        else if (strcmp(code, "fail") == 0) { word = "Failing"; col = COL_RED;   }
+        else if (strcmp(code, "run")  == 0) { word = "Running"; col = COL_AMBER; }
+        else if (strcmp(code, "wait") == 0) { word = "Action";  col = COL_AMBER; }
+        else                                { word = "—";       col = COL_DIM;   }
+        lv_label_set_text(lbl_ci_status, word);
+        lv_obj_set_style_text_color(lbl_ci_status, col, 0);
+
+        char repo_buf[64];
+        if (data->ci_repo[0] && data->ci_branch[0]) {
+            snprintf(repo_buf, sizeof(repo_buf), "%s  -  %s", data->ci_repo, data->ci_branch);
+        } else {
+            snprintf(repo_buf, sizeof(repo_buf), "%s", data->ci_repo);
+        }
+        lv_label_set_text(lbl_ci_repo, repo_buf);
+
+        lv_label_set_text_fmt(lbl_ci_failing, "%u", (unsigned)data->ci_failing);
+        lv_obj_set_style_text_color(lbl_ci_failing,
+                                    data->ci_failing > 0 ? COL_RED : COL_TEXT, 0);
+
+        if (data->ci_waiting > 0) {
+            lv_label_set_text_fmt(lbl_ci_waiting, "%u waiting approval",
+                                  (unsigned)data->ci_waiting);
+        } else {
+            lv_label_set_text(lbl_ci_waiting, "");
+        }
+
+        lv_label_set_text(lbl_ci_hint,
+                          data->ci_workflow[0] ? data->ci_workflow : "Refreshed just now");
+    } else {
+        lv_label_set_text(lbl_ci_status, "No data");
+        lv_obj_set_style_text_color(lbl_ci_status, COL_DIM, 0);
+        lv_label_set_text(lbl_ci_repo, "");
+        lv_label_set_text(lbl_ci_failing, "0");
+        lv_obj_set_style_text_color(lbl_ci_failing, COL_TEXT, 0);
+        lv_label_set_text(lbl_ci_waiting, "");
+        lv_label_set_text(lbl_ci_hint, "Enable CI/CD in the daemon settings");
     }
 
     // ---- Copilot screen ----
@@ -827,6 +953,7 @@ static bool screen_enabled[SCREEN_COUNT] = {
     true,   // USAGE
     true,   // TODAY
     true,   // GITHUB
+    true,   // CI
     true,   // COPILOT
     true,   // BLUETOOTH
 };
@@ -843,6 +970,7 @@ static screen_t name_to_screen(const char* tok, size_t len) {
     if (eq("usage"))   return SCREEN_USAGE;
     if (eq("today"))   return SCREEN_TODAY;
     if (eq("github"))  return SCREEN_GITHUB;
+    if (eq("ci"))      return SCREEN_CI;
     if (eq("copilot")) return SCREEN_COPILOT;
     return SCREEN_COUNT;
 }
@@ -899,6 +1027,7 @@ void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(today_container,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(github_container,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ci_container,      LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(copilot_container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ble_container,     LV_OBJ_FLAG_HIDDEN);
     splash_hide();
@@ -908,6 +1037,7 @@ void ui_show_screen(screen_t screen) {
     case SCREEN_USAGE:      lv_obj_clear_flag(usage_container,   LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_TODAY:      lv_obj_clear_flag(today_container,   LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_GITHUB:     lv_obj_clear_flag(github_container,  LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_CI:         lv_obj_clear_flag(ci_container,      LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_COPILOT:    lv_obj_clear_flag(copilot_container, LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_BLUETOOTH:  lv_obj_clear_flag(ble_container,     LV_OBJ_FLAG_HIDDEN); break;
     default: break;
@@ -920,7 +1050,7 @@ void ui_show_screen(screen_t screen) {
     current_screen = screen;
 }
 
-// Cycle order: SPLASH → USAGE → TODAY → GITHUB → COPILOT → BLUETOOTH → SPLASH.
+// Cycle order: SPLASH → USAGE → TODAY → GITHUB → CI → COPILOT → BLUETOOTH → SPLASH.
 // Skip any "app" screen whose enabled bit is clear so the user only sees
 // the apps they've checked in the tray window.
 static screen_t cycle_next_after(screen_t s) {
@@ -928,7 +1058,8 @@ static screen_t cycle_next_after(screen_t s) {
         case SCREEN_SPLASH:    return SCREEN_USAGE;
         case SCREEN_USAGE:     return SCREEN_TODAY;
         case SCREEN_TODAY:     return SCREEN_GITHUB;
-        case SCREEN_GITHUB:    return SCREEN_COPILOT;
+        case SCREEN_GITHUB:    return SCREEN_CI;
+        case SCREEN_CI:        return SCREEN_COPILOT;
         case SCREEN_COPILOT:   return SCREEN_BLUETOOTH;
         case SCREEN_BLUETOOTH: return SCREEN_SPLASH;
         default:               return SCREEN_USAGE;
@@ -961,6 +1092,7 @@ bool ui_focus_by_name(const char* name) {
     else if (strcmp(name, "usage")     == 0) target = SCREEN_USAGE;
     else if (strcmp(name, "today")     == 0) target = SCREEN_TODAY;
     else if (strcmp(name, "github")    == 0) target = SCREEN_GITHUB;
+    else if (strcmp(name, "ci")        == 0) target = SCREEN_CI;
     else if (strcmp(name, "copilot")   == 0) target = SCREEN_COPILOT;
     else if (strcmp(name, "bluetooth") == 0) target = SCREEN_BLUETOOTH;
     else return false;

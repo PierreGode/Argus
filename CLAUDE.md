@@ -1,6 +1,6 @@
 # Argus — project context
 
-ESP32-S3 firmware for **Argus**, a desk-side dev monitor on a **Waveshare ESP32-S3-Touch-AMOLED-2.16** board (480×480 square AMOLED). Connects to a host daemon over BLE; the daemon polls the Anthropic API for Claude Code usage, GitHub for issue/PR counts, and GitHub Copilot for seat status + AI-credit usage, then pushes a JSON payload to the device. The device cycles through Splash / Usage / Today / GitHub / Copilot / Bluetooth screens and can auto-focus on a screen when something noteworthy changes (e.g. a new PR).
+ESP32-S3 firmware for **Argus**, a desk-side dev monitor on a **Waveshare ESP32-S3-Touch-AMOLED-2.16** board (480×480 square AMOLED). Connects to a host daemon over BLE; the daemon polls the Anthropic API for Claude Code usage, GitHub for issue/PR counts, and GitHub Copilot for seat status + AI-credit usage, then pushes a JSON payload to the device. The device cycles through Splash / Usage / Today / GitHub / CI / Copilot / Bluetooth screens and can auto-focus on a screen when something noteworthy changes (e.g. a new PR, or a failed/awaiting-approval GitHub Actions run).
 
 Argus began as a fork of an upstream ESP32 usage-monitor project, then was renamed and reworked. Leftover third-party library strings in build artifacts (e.g. `.pio/` libdeps) are upstream content and not load-bearing.
 
@@ -19,7 +19,7 @@ This file is for future Claude Code sessions to bootstrap quickly. Read this fir
 ```text
 main.cpp        — setup(), loop(), BOOT-button polling (cycle screens), rotation flash, JSON payload parsing
 display_cfg.h   — pin defines, extern object decls
-ui.{h,cpp}      — 6 screens (splash, usage, today, github, copilot, bluetooth); splash is touch-toggled, others cycled via mid button. Daemon can hide screens from the cycle via the enabled-apps CSV.
+ui.{h,cpp}      — 7 screens (splash, usage, today, github, ci, copilot, bluetooth); splash is touch-toggled, others cycled via mid button. Daemon can hide screens from the cycle via the enabled-apps CSV.
 splash.{h,cpp}  — sprite-driven splash: 6 mascot expressions (240×240 RGB565A8, 2× upscale to 480×480), mood-locked or cycled by usage-rate group, plus a rotating events strip
 usage_rate.{h,cpp} — maps the current caps to a 0..3 usage-rate group used by the splash
 imu.{h,cpp}     — accelerometer-driven rotation tracker (returns 0..3)
@@ -81,11 +81,11 @@ See `~/.claude/projects/.../memory/` files for persistent context (user is an em
 
 ## Daemon / host side
 
-The primary daemon is **`daemon/argus-daemon.py`** — a cross-platform PySide6 tray app + worker thread. It polls the Anthropic API (rate-limit headers), parses `~/.claude/projects/**/*.jsonl` for today's stats, polls GitHub (`github_stats.py`) and Copilot (`copilot_stats.py`), then ships one JSON line per poll. Settings live in `%APPDATA%/Argus/config.json` (Windows), `~/Library/Application Support/Argus/config.json` (macOS), or `~/.config/argus/config.json` (Linux); the GitHub token is encrypted at rest (`token_crypt.py`). `tray_ui.py` holds the window/config code; `version.py` is the single source of truth for the version.
+The primary daemon is **`daemon/argus-daemon.py`** — a cross-platform PySide6 tray app + worker thread. It polls the Anthropic API (rate-limit headers), parses `~/.claude/projects/**/*.jsonl` for today's stats, polls GitHub (`github_stats.py`), GitHub Actions CI (`ci_stats.py`) and Copilot (`copilot_stats.py`), then ships one JSON line per poll. Settings live in `%APPDATA%/Argus/config.json` (Windows), `~/Library/Application Support/Argus/config.json` (macOS), or `~/.config/argus/config.json` (Linux); the GitHub token is encrypted at rest (`token_crypt.py`). `tray_ui.py` holds the window/config code; `version.py` is the single source of truth for the version.
 
 `daemon/argus-daemon.sh` is the original Linux/systemd bash daemon (run via `systemctl --user start argus-daemon`); it predates the Python port and only does Claude rate limits.
 
-**The wire payload** is built in `build_payload()` and parsed in `main.cpp`'s `parse_payload()`. Keys are short to fit the BLE MTU — `s`/`sr`/`w`/`wr` (caps), `c`/`cw`/`mo`/`ms`/`mh`/`ch`/`tk`/`se`/`pj` (today), `ge`/`gi`/`gp` (GitHub), `cp`/`cps`/`cpw`/`cpe`/`cpr`/`cpp`/`cpu`/`cpa`/`cpsu`/`cpm` (Copilot), `apps` (enabled-screens CSV), `tac`/`tch` (Today screen: show cost panel / cache panel), `md`/`evts` (splash mood + events strip), `br` (brightness), `fc` (one-shot auto-focus), `nm` (BLE device-name override — firmware persists it to NVS and re-advertises, so multiple Argus units don't all collide on `"Argus Controller"`). The firmware ignores unknown keys, so the two sides can version independently. The full table lives in README.md.
+**The wire payload** is built in `build_payload()` and parsed in `main.cpp`'s `parse_payload()`. Keys are short to fit the BLE MTU — `s`/`sr`/`w`/`wr` (caps), `c`/`cw`/`mo`/`ms`/`mh`/`ch`/`tk`/`se`/`pj` (today), `ge`/`gi`/`gp` (GitHub), `cie`/`cis`/`cir`/`cib`/`ciw`/`cif`/`ciq` (CI/CD — GitHub Actions, via `ci_stats.py`), `cp`/`cps`/`cpw`/`cpe`/`cpr`/`cpp`/`cpu`/`cpa`/`cpsu`/`cpm` (Copilot), `apps` (enabled-screens CSV), `tac`/`tch` (Today screen: show cost panel / cache panel), `md`/`evts` (splash mood + events strip), `br` (brightness), `fc` (one-shot auto-focus), `nm` (BLE device-name override — firmware persists it to NVS and re-advertises, so multiple Argus units don't all collide on `"Argus Controller"`). The firmware ignores unknown keys, so the two sides can version independently. The full table lives in README.md.
 
 **Discovery & resilience:** connects by name (`"Argus Controller"`), caches the resolved MAC, and on connect failure drops the cache (and removes the device from bluez on Linux) so the next scan won't re-pick a dead MAC. ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache. The inner loop wakes every ~5s to detect disconnects fast and polls when the interval elapses OR when the ESP fires a refresh request.
 
