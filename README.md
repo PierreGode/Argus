@@ -63,7 +63,7 @@ The mechanism generalizes to other triggers (rate-limit threshold crossings, etc
 
 ## Hardware
 
-- [Waveshare ESP32-S3-Touch-AMOLED-2.16](https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786) — ESP32-S3R8, 2.16" 480×480 AMOLED (CO5300 QSPI), CST9220 cap touch, AXP2101 PMU + Li-Po battery, QMI8658 IMU.
+- [Waveshare ESP32-S3 Smart 86 Box]([https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm?&aff_id=149786](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm)) — Waveshare ESP32-S3 Smart 86 Box Development Board.
 - USB-C cable for flashing and charging.
 - 3.7V Li-Po battery (MX1.25 2-pin connector, optional).
 
