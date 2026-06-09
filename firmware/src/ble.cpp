@@ -32,7 +32,11 @@ static void load_device_name() {
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
 
-#define BLE_BUF_SIZE 512
+// Holds one full reassembled payload. The daemon streams the JSON across
+// several writes (a single GATT attribute value can't exceed 512 octets) and
+// terminates it with '\n'; we accumulate chunks until that newline. Sized well
+// above the largest realistic payload so growth has headroom.
+#define BLE_BUF_SIZE 1024
 
 // HID keyboard report descriptor
 static const uint8_t HID_REPORT_MAP[] = {
@@ -71,7 +75,9 @@ static NimBLECharacteristic* req_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
-static char rx_buf[BLE_BUF_SIZE];
+static char rx_buf[BLE_BUF_SIZE];          // last complete payload, handed to the main loop
+static char rx_accum[BLE_BUF_SIZE];        // chunks assembled until the '\n' terminator
+static size_t rx_accum_len = 0;
 static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
 static char mac_str[18];
@@ -97,20 +103,38 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
         state = BLE_STATE_DISCONNECTED;
         need_advertise = true;
+        rx_accum_len = 0;  // drop any half-received payload so the next link starts clean
         Serial.printf("BLE: disconnected (reason=%d)\n", reason);
     }
 
 };
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
+    // The daemon streams each JSON payload as one or more writes terminated by
+    // '\n'. We append bytes until we see that newline, then publish the
+    // assembled message. json.dumps escapes any newline inside the data, so the
+    // only raw '\n' on the wire is the terminator. A single un-chunked write
+    // (small payload) still works — it just arrives with its newline in one go.
     void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
         std::string val = chr->getValue();
-        size_t len = val.length();
-        if (len >= BLE_BUF_SIZE) len = BLE_BUF_SIZE - 1;
-        memcpy(rx_buf, val.c_str(), len);
-        rx_buf[len] = '\0';
-        data_ready = true;
-        has_received_data = true;
+        const char* data = val.data();
+        size_t n = val.length();
+        for (size_t i = 0; i < n; i++) {
+            char c = data[i];
+            if (c == '\n') {
+                if (rx_accum_len > 0) {
+                    memcpy(rx_buf, rx_accum, rx_accum_len);
+                    rx_buf[rx_accum_len] = '\0';
+                    data_ready = true;
+                    has_received_data = true;
+                }
+                rx_accum_len = 0;
+            } else if (rx_accum_len < BLE_BUF_SIZE - 1) {
+                rx_accum[rx_accum_len++] = c;
+            } else {
+                rx_accum_len = 0;  // overflow with no terminator — drop and resync
+            }
+        }
     }
 };
 

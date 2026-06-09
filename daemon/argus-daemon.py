@@ -800,6 +800,53 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     return mood, events[:6]
 
 
+# The payload is streamed to the device in chunks and reassembled (see
+# _ble_write), so it's no longer bounded by the 512-octet single-attribute
+# limit. This is just a backstop kept under the firmware's reassembly buffer
+# (BLE_BUF_SIZE = 1024) so a pathologically large payload can't overflow it.
+_PAYLOAD_BUDGET = 1000
+
+
+def _fit_payload(fields: dict) -> str:
+    """Serialize `fields`; if it won't fit in one BLE attribute, shed the
+    least-important keys (and trim the events strip) until it does. The firmware
+    treats every shed key as absent and falls back gracefully, so a CI workflow
+    name or a second events line is a far better thing to lose than the whole
+    payload."""
+    s = json.dumps(fields, separators=(",", ":"))
+    if len(s) <= _PAYLOAD_BUDGET:
+        return s
+
+    def _evts_to_one():
+        e = fields.get("evts")
+        if isinstance(e, list) and len(e) > 1:
+            fields["evts"] = e[:1]
+
+    # Least-important first. The events strip is cosmetic (rotating splash
+    # text), so it goes before the actionable CI detail. CI then degrades
+    # workflow → branch → repo, leaving the headline status/counts intact.
+    steps = [
+        ("cpm",    lambda: fields.pop("cpm", None)),   # Copilot top model (often empty)
+        ("evts:1", _evts_to_one),                       # trim events strip to one line
+        ("ciw",    lambda: fields.pop("ciw", None)),   # CI workflow name (bottom hint only)
+        ("evts",   lambda: fields.pop("evts", None)),  # drop the events strip entirely
+        ("cib",    lambda: fields.pop("cib", None)),   # CI branch
+        ("cir",    lambda: fields.pop("cir", None)),   # CI repo name
+        ("cpw",    lambda: fields.pop("cpw", None)),   # Copilot last-activity
+        ("pj",     lambda: fields.pop("pj", None)),    # today's project name
+    ]
+    dropped = []
+    for label, mutate in steps:
+        if len(s) <= _PAYLOAD_BUDGET:
+            break
+        mutate()
+        dropped.append(label)
+        s = json.dumps(fields, separators=(",", ":"))
+    if dropped:
+        log(f"payload trimmed to {len(s)}B for BLE (dropped: {', '.join(dropped)})")
+    return s
+
+
 def build_payload(api_token: str) -> str:
     """Combine rate-limit headers, today's local-log stats, GitHub counts, and
     brightness into one JSON line. Reads config.json on every call so the
@@ -846,7 +893,7 @@ def build_payload(api_token: str) -> str:
         fields["fc"] = focus
         log(f"Auto-focus → {focus}")
 
-    return json.dumps(fields, separators=(",", ":"))
+    return _fit_payload(fields)
 
 def configured_device_name() -> str:
     """The BLE name the device currently advertises and we scan for. Falls back
@@ -1014,6 +1061,22 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
         log(f"Reconnecting in {RECONNECT_DELAY}s...")
         time.sleep(RECONNECT_DELAY)
 
+# Bytes per BLE write. Kept under the smallest common ATT MTU payload
+# (MTU 247 → 244 usable) so each chunk is a single write op on any adapter; with
+# the usual MTU 517 it's well within one op too. The firmware reassembles chunks
+# up to its newline terminator.
+_BLE_CHUNK = 240
+
+
+async def _ble_write(client, payload: str) -> None:
+    """Write `payload` to the RX characteristic, newline-terminated, in
+    MTU-safe chunks. The firmware accumulates chunks until the '\\n', so the
+    payload can exceed the 512-octet single-attribute limit."""
+    data = (payload + "\n").encode("utf-8")
+    for i in range(0, len(data), _BLE_CHUNK):
+        await client.write_gatt_char(RX_CHAR_UUID, data[i:i + _BLE_CHUNK], response=True)
+
+
 async def run_ble(demo_mode: bool, token,
                   stop_event: threading.Event | None = None,
                   wake_event: threading.Event | None = None):
@@ -1080,18 +1143,11 @@ async def run_ble(demo_mode: bool, token,
                     try:
                         payload = demo_payload() if demo_mode else build_payload(token)
                         log(f"Sending: {payload}")
-                        # response=True triggers Windows BLE's write-request
-                        # path, which negotiates a higher ATT MTU and falls
-                        # back to "prepared write" (long write) when the
-                        # payload exceeds MTU-3. Write-without-response has
-                        # no fragmentation — a payload >~20 bytes against a
-                        # default-MTU peer fails with WinError -2147024809
-                        # ("Felaktig parameter" on Swedish Windows).
-                        await client.write_gatt_char(
-                            RX_CHAR_UUID,
-                            payload.encode("utf-8"),
-                            response=True
-                        )
+                        # Streamed in newline-terminated chunks and reassembled
+                        # on the device, so payloads aren't capped at the
+                        # 512-octet single-attribute limit. response=True keeps
+                        # the chunks ordered and acknowledged.
+                        await _ble_write(client, payload)
                         log("Sent OK")
                         _commit_pending_rename()
                     except httpx.HTTPError as e:

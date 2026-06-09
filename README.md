@@ -158,7 +158,7 @@ Both BLE and USB-C carry the same JSON payload. Over BLE it's a single GATT writ
 
 ### Payload
 
-Keys are short to fit the BLE MTU. The firmware ignores keys it doesn't recognize, so the two sides can version independently.
+Keys are short to keep the payload small. It's streamed to the device in newline-terminated chunks and reassembled on the firmware, so it isn't bound by the 512-octet single-write BLE limit. The firmware ignores keys it doesn't recognize, so the two sides can version independently.
 
 ```json
 {

@@ -91,6 +91,6 @@ The primary daemon is **`daemon/argus-daemon.py`** — a cross-platform PySide6 
 
 **GATT characteristics on service `4c41555a-...0001`:**
 
-- `...0002` RX — daemon writes the JSON usage payload here.
+- `...0002` RX — daemon writes the JSON usage payload here. A single GATT attribute value is capped at 512 octets by the BLE spec, but the payload outgrew that (Copilot + CI fields), so the daemon **streams it in ≤240-byte chunks terminated by `\n`** (`_ble_write` in `argus-daemon.py`) and the firmware reassembles chunks until the newline (`RxCallbacks::onWrite` accumulates into `rx_accum`, `BLE_BUF_SIZE = 1024`). `json.dumps` escapes any newline inside the data, so the only raw `\n` on the wire is the terminator. The USB path already used `\n` framing (`CMD_BUF_SIZE = 1024`). Both sides must be updated together — old firmware that replaces the buffer per write only sees the last chunk.
 - `...0003` TX — firmware notifies ack/nack (daemon doesn't subscribe).
 - `...0004` REQ — firmware fires a `0x01` notify in `onSubscribe` if it hasn't received data yet, asking the daemon to push immediately.
