@@ -177,8 +177,9 @@ static bool parse_json(const char* json, UsageData* out) {
     return true;
 }
 
-// Serial command buffer (sized to fit JSON usage payloads with headroom)
-#define CMD_BUF_SIZE 256
+// Serial command buffer (sized to fit JSON usage payloads with headroom; must
+// match the BLE reassembly buffer since the same payloads arrive over USB).
+#define CMD_BUF_SIZE 1024
 static char cmd_buf[CMD_BUF_SIZE];
 static int cmd_pos = 0;
 
