@@ -20,16 +20,21 @@ What Argus shows:
 - **Usage** — Claude Code rate limits: the 5-hour session window and 7-day weekly window, with reset countdowns.
 - **Today** — today's API-equivalent token cost, the Opus / Sonnet / Haiku split, cache hit rate and session count, parsed from your local Claude Code logs.
 - **GitHub** — open issues assigned to you and PRs awaiting your review, fetched with a PAT (`github_stats.py`).
+- **CI/CD** — GitHub Actions status across your recently-pushed repos: pass / fail / running / awaiting-approval, with auto-focus when a run fails or needs your sign-off (`ci_stats.py`).
 - **Copilot** — GitHub Copilot seat status (active / idle, editor, last activity) and monthly AI-credit usage for your org or enterprise (`copilot_stats.py`).
 - **Auto-focus** — the device jumps to the relevant screen when something changes (e.g. a new PR → GitHub). Manual navigation is preserved between events, so it never feels hostile.
-- A **PySide6 tray app** for Windows / macOS / Linux (`tray_ui.py`) with a live log, settings window, and system-tray integration. Edits apply on the next poll (immediately on Save). You can also choose which screens cycle on the device.
+- A **PySide6 tray app** (`tray_ui.py`) with a live log, settings window, and system-tray integration. Edits apply on the next poll (immediately on Save). You choose which screens cycle, toggle power-save, rename the device, and more. Windows is the primary target; macOS / Linux run from source.
 
 
 ## Quick start
 
+> **Platform support:** Argus targets **Windows** — that's the build that's packaged, signed-ready, and tested. macOS and Linux are best-effort: the daemon runs, but there's no installer, so you [run it from source](#run-the-daemon-from-source).
+
+> **Claude login (required for the Usage / Today screens):** install the **Claude desktop app** and sign in with an active subscription. Argus reuses that OAuth login — it reads (and auto-refreshes) the token from `~/.claude/.credentials.json` and parses your local conversation logs from `~/.claude/projects/`. No Anthropic API key needed.
+
 1. **Flash the firmware**: open <https://pierregode.github.io/Argus/> in Chrome / Edge / Opera, plug the board in over USB-C, and click **Flash Argus**. (Prefer building from source? See [Build the firmware](#build-the-firmware-locally).)
-2. **Download the daemon** from the same page. On Windows, grab **`Argus-Setup.msi`** (a proper installer — adds Argus to the Start menu and Apps & features; a portable `.exe` is also linked). macOS / Linux get a single binary.
-3. **Run it**: it lives in the system tray. Right-click → **Show window** to enter a GitHub token, set brightness, pick BLE / USB-C transport, choose poll interval, or toggle Start with Windows. Settings are saved to `%APPDATA%\Argus\config.json` (or the platform-equivalent) and applied on the next send.
+2. **Install the daemon** (Windows): download **`Argus-Setup.msi`** from the same page — a proper installer that adds Argus to the Start menu and Apps & features (a portable `.exe` is also linked). On macOS / Linux, [run from source](#run-the-daemon-from-source).
+3. **Run it**: it lives in the system tray. Right-click → **Show window** to enter a GitHub token, set brightness, pick BLE / USB-C transport, choose poll interval, enable power-save, or toggle Start with Windows. Settings are saved to `%APPDATA%\Argus\config.json` (or the platform-equivalent) and applied on the next send.
 
 > **Windows install note:** the MSI is per-machine, so it asks for admin rights. These builds are **not signed with a commercial code-signing certificate**, so Windows shows an "unknown publisher" UAC prompt and SmartScreen may warn on first run — choose **More info → Run anyway**. Only a paid OV/EV certificate removes those warnings; a self-signed cert does not.
 
@@ -37,7 +42,7 @@ The device pairs the first time it sees the daemon; from then on it reconnects a
 
 ## Screens
 
-The device boots into the splash and stays there until you press the BOOT button, which cycles `Splash → Usage → Today → GitHub → Copilot → Bluetooth`. Screens you've unchecked in the tray app are skipped. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
+The device boots into the splash and stays there until you press the BOOT button, which cycles `Splash → Usage → Today → GitHub → CI → Copilot → Bluetooth`. Screens you've unchecked in the tray app are skipped. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
 
 **Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours.
 
@@ -45,13 +50,15 @@ The device boots into the splash and stays there until you press the BOOT button
 
 **GitHub** shows open issues assigned to you and open PRs awaiting your review (or assigned to you). Requires a GitHub PAT in the daemon's tray settings (Issues + Pull requests read scopes). Refreshes every 5 minutes. With no token configured the panels show `No data` and a hint.
 
+**CI/CD** shows the latest GitHub Actions run across your most recently-pushed repos — a headline status (Passing / Failing / Running / Action needed for an environment approval), plus counts of failing and approval-waiting runs. Enable it (and its per-event auto-focus rules) in the GitHub tab; it reuses the same PAT, which needs the **Actions: read** scope.
+
 **Copilot** shows your GitHub Copilot seat status (active / idle / inactive, the editor you last used it in, and how long ago) plus this month's AI-credit usage against the configured allowance. Requires a PAT with Copilot org/enterprise read access and the org (or enterprise) slug set in the tray app; otherwise it shows `No data`.
 
 On the splash, the mascot's expression changes on its own to match your current usage rate, or locks to the "mood" the daemon sends when something needs attention (a maxed-out cap, a fresh PR). A strip below the mascot rotates through recent events — hot rate-limit windows with reset countdowns, new PRs/issues, and Copilot credit burn.
 
 ## Auto-focus
 
-Argus tracks event counters between polls. When something noteworthy changes — currently the trigger is a new GitHub PR or new issue assigned to you — the daemon adds `"fc": "github"` to that single payload and the firmware switches to the GitHub screen.
+Argus tracks event counters between polls. When something noteworthy changes — a new GitHub PR or issue assigned to you, or a CI run that just failed or now needs an environment approval — the daemon adds an `"fc"` target (e.g. `"github"` or `"ci"`) to that single payload and the firmware switches to that screen. The CI triggers are individually toggleable in the tray app.
 
 Behavioral rules:
 
@@ -59,7 +66,7 @@ Behavioral rules:
 - Manual navigation is preserved: if you press the BOOT button to move elsewhere, subsequent "no change" polls leave you alone.
 - A further event fires another switch — the daemon only sends `fc` on the poll where the delta is detected, not continuously.
 
-The mechanism generalizes to other triggers (rate-limit threshold crossings, etc.) by adding more entries to `_detect_focus()` in `argus-daemon.py`. The supported `fc` values are `splash`, `usage`, `today`, `github`, `copilot`, `bluetooth`.
+The mechanism generalizes to other triggers (rate-limit threshold crossings, etc.) by adding more entries to `_detect_focus()` in `argus-daemon.py`. The supported `fc` values are `splash`, `usage`, `today`, `github`, `ci`, `copilot`, `bluetooth`.
 
 ## Hardware
 
@@ -80,14 +87,15 @@ The daemon polls Anthropic's rate-limit headers, parses local Claude Code conver
 
 The daemon checks the connection every 2 seconds and reconnects fast if you unplug, walk out of BLE range, or restart the board.
 
-The tray app is the recommended way to run it on Windows / macOS. Closing the window hides to tray; right-click the tray icon → Quit to actually exit. The window shows live log output, the current connection status, and exposes all settings (GitHub token, Copilot org/enterprise + allowance, brightness, transport, poll interval, which screens to show, autostart).
+The tray app is the way to run it on Windows. Closing the window hides to tray; right-click the tray icon → Quit to actually exit. The window shows live log output, the current connection status, and exposes every setting: GitHub token (encrypted at rest), Copilot org/enterprise + allowance, CI/CD auto-focus rules, which screens cycle and which Today panels show, brightness, power-save, device rename, transport, poll interval, and Start with Windows.
 
 ## Prerequisites
 
-- Linux / macOS / Windows
-- [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html) (for building firmware from source)
-- Python 3.11+ with `pip`
-- Claude Code with an active subscription
+- **Windows** (primary, packaged). macOS / Linux work from source but aren't packaged or regularly tested.
+- The **Claude desktop app**, installed and signed in with an active subscription — Argus reads its OAuth token from `~/.claude/.credentials.json`. No Anthropic API key.
+- A **GitHub PAT** (optional) for the GitHub / CI / Copilot screens.
+- Python 3.11+ with `pip` (only if running the daemon from source).
+- [PlatformIO CLI](https://docs.platformio.org/en/latest/core/installation/index.html) (only if building firmware from source).
 
 ## Build the firmware locally
 
@@ -99,6 +107,8 @@ pio run -t upload
 PlatformIO auto-detects the USB port. On Windows, the COM number can change between plug-ins — `pio device list` will show what to expect.
 
 ## Run the daemon from source
+
+This is how you run it on **macOS / Linux** (no packaged installer there), and how to hack on the daemon on any OS:
 
 ```bash
 pip install -r daemon/requirements.txt
@@ -137,14 +147,14 @@ The MAC address is shown on the Bluetooth screen — press the BOOT button to cy
 
 | Input                | Action                                                                                  |
 | -------------------- | --------------------------------------------------------------------------------------- |
-| **BOOT button** (GPIO 0) | Cycle screens: `Splash → Usage → Today → GitHub → Copilot → Bluetooth` (skips screens disabled in the tray app) |
+| **BOOT button** (GPIO 0) | Cycle screens: `Splash → Usage → Today → GitHub → CI → Copilot → Bluetooth` (skips screens disabled in the tray app). Also wakes the screen from power-save. |
 | **Tap the screen**   | Flip to the splash and back; tap the Reset zone on the Bluetooth screen to clear BLE bonds |
 
 > The firmware also exposes a BLE HID keyboard service (intended for sending Claude Code shortcuts like Space and Shift+Tab), but the current build doesn't bind it to a button.
 
 ## Wire protocol
 
-Both BLE and USB-C carry the same JSON payload. Over BLE it's a single GATT write; over USB-C it's a newline-terminated line at 115200 baud.
+Both BLE and USB-C carry the same JSON payload, newline-terminated. Over BLE it's streamed to the RX characteristic in ≤240-byte chunks and reassembled on the device (so it isn't capped at the 512-octet single-attribute limit); over USB-C it's one line at 115200 baud.
 
 ### BLE characteristics
 
