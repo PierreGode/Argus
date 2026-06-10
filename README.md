@@ -1,3 +1,4 @@
+
 # Argus
 
 A small ESP32 dashboard that sits on my desk and watches my dev workflow — Claude Code rate limits, GitHub issues and PRs, today's token spend — then auto-switches to whichever screen has news.
@@ -12,6 +13,8 @@ A small ESP32 dashboard that sits on my desk and watches my dev workflow — Cla
     <td><img width="400" alt="image" src="https://github.com/user-attachments/assets/adbd3f8e-8bff-4b01-b44f-19330b06f81c" /></td>
   </tr>
 </table>
+<img width="500" height="480" alt="windows" src="https://github.com/user-attachments/assets/c9ece339-0eb7-459f-befb-8f420151e486" />
+
 
 It runs on a [Waveshare ESP32-S3 Smart 86 Box Development Board]([https://www.waveshare.com/esp32-s3-touch-amoled-2.16.htm](https://www.waveshare.com/esp32-s3-touch-lcd-4b.htm?srsltid=AfmBOooN9vv19u7xrLtIeogvE-IVSSIeT_IpFkS2dTC-TlfwmNQxaFYp)), pairs with my laptop over Bluetooth (or USB-C), and the splash screen shows an animated mascot whose expression tracks how hard you're pushing your limits.
 
