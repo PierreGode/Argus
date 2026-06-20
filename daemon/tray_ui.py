@@ -93,6 +93,8 @@ DEFAULTS = {
     "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
     "today_show_cost": True,   # Today screen: show the "API equiv." cost panel
     "today_show_cache": True,  # Today screen: show the cache-hit panel (model split always shows)
+    "desktop_buddy": False,    # show a floating mascot on the desktop that mirrors the device
+    "buddy_pos": None,         # [x, y] of the buddy window, persisted across runs (None = default corner)
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
@@ -280,6 +282,38 @@ def set_status(state: str, label: str) -> None:
 def _snapshot_status() -> dict:
     with _STATUS_LOCK:
         return dict(_STATUS)
+
+
+# ----- Desktop buddy state --------------------------------------------------
+#
+# The worker publishes the same mood + events strip it ships to the device so a
+# floating desktop mascot can mirror it. `enabled` is driven by config/the tray
+# toggle on the UI thread; mood/events are pushed from the worker on every poll.
+# The buddy window reads this (plus _STATUS for connected-ness) on a QTimer —
+# the worker never touches widgets directly.
+
+_BUDDY: dict = {"mood": "happy", "events": [], "enabled": False}
+_BUDDY_LOCK = threading.Lock()
+
+
+def set_buddy_mood(mood: str, events: list) -> None:
+    """Publish the current mascot mood + event lines. Safe from any thread."""
+    with _BUDDY_LOCK:
+        _BUDDY["mood"] = mood or "happy"
+        _BUDDY["events"] = [str(e) for e in (events or [])]
+
+
+def set_buddy_enabled(enabled: bool) -> None:
+    """Turn the floating buddy on/off. Called on the UI thread from config."""
+    with _BUDDY_LOCK:
+        _BUDDY["enabled"] = bool(enabled)
+
+
+def _snapshot_buddy() -> dict:
+    with _BUDDY_LOCK:
+        d = dict(_BUDDY)
+        d["events"] = list(_BUDDY["events"])
+        return d
 
 
 # ----- Brand / theme --------------------------------------------------------
@@ -576,8 +610,8 @@ def _make_app_icon():
 # ----- Qt main window -------------------------------------------------------
 
 def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> bool:
-    from PySide6.QtCore import Qt, QTimer
-    from PySide6.QtGui import QAction
+    from PySide6.QtCore import Qt, QTimer, QPoint
+    from PySide6.QtGui import QAction, QPixmap
     from PySide6.QtWidgets import (
         QApplication, QMainWindow, QSystemTrayIcon, QMenu, QWidget,
         QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -823,6 +857,19 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "or a button press."
             )
             dv.addWidget(self.chk_power_save)
+
+            # Desktop buddy — a floating mascot on this computer that mirrors the
+            # device's current mood + event strip. Only shows while a device is
+            # connected (see Buddy.refresh()).
+            self.chk_buddy = QCheckBox("Desktop buddy (floating mascot on your screen)")
+            self.chk_buddy.setChecked(bool(cfg.get("desktop_buddy", False)))
+            self.chk_buddy.setToolTip(
+                "Show a small always-on-top mascot on this computer that mirrors "
+                "the device's expression and event ticker. It appears only while "
+                "an Argus device is connected. Drag it to reposition; the spot is "
+                "remembered."
+            )
+            dv.addWidget(self.chk_buddy)
 
             disp.setLayout(dv)
             v.addWidget(disp)
@@ -1094,11 +1141,18 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "pending_name":       pending_name,
                 "today_show_cost":    self.chk_today_cost.isChecked(),
                 "today_show_cache":   self.chk_today_cache.isChecked(),
+                "desktop_buddy":      self.chk_buddy.isChecked(),
+                "buddy_pos":          prev.get("buddy_pos"),
                 "ci_focus_fail":      self.chk_ci_focus_fail.isChecked(),
                 "ci_focus_action":    self.chk_ci_focus_action.isChecked(),
                 "ci_focus_success":   self.chk_ci_focus_success.isChecked(),
             }
             save_config(new_cfg)
+            set_buddy_enabled(new_cfg["desktop_buddy"])
+            if getattr(self, "_act_buddy", None) is not None:
+                self._act_buddy.blockSignals(True)
+                self._act_buddy.setChecked(new_cfg["desktop_buddy"])
+                self._act_buddy.blockSignals(False)
             if pending_name and pending_name != prev_pending:
                 self.log_view.appendPlainText(
                     f"[ui] rename to '{pending_name}' queued — applies on the next connect"
@@ -1121,7 +1175,185 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             e.ignore()
             self.hide()
 
+    # ----- Floating desktop buddy -------------------------------------------
+    #
+    # A frameless, translucent, always-on-top mascot that mirrors the device:
+    # it shows the same mood face the daemon ships and cycles the same event
+    # strip in a little speech bubble. It only appears while a device is
+    # connected (status == "ok") and the toggle is on. Drag to reposition; the
+    # position is persisted to config.
+
+    BUDDY_FACE_PX = 132
+    BUDDY_MOODS = ("happy", "looking", "flirt", "buffeld", "surprised", "angry")
+    BUDDY_EVENT_INTERVAL_MS = 4000
+
+    class Buddy(QWidget):
+        def __init__(self):
+            super().__init__(
+                None,
+                Qt.FramelessWindowHint | Qt.Tool | Qt.WindowStaysOnTopHint,
+            )
+            self.setWindowTitle("Argus Buddy")
+            self.setAttribute(Qt.WA_TranslucentBackground, True)
+            self.setWindowIcon(icon)
+
+            self._mood = None
+            self._pix_cache: dict = {}
+            self._events: list = []
+            self._event_idx = 0
+            self._drag_off: QPoint | None = None
+            self._placed = False
+
+            v = QVBoxLayout(self)
+            v.setContentsMargins(0, 0, 0, 0)
+            v.setSpacing(2)
+
+            self.bubble = QLabel()
+            self.bubble.setWordWrap(True)
+            self.bubble.setMaximumWidth(248)
+            self.bubble.setAlignment(Qt.AlignCenter)
+            self.bubble.setStyleSheet(
+                f"background-color: {BG_CARD};"
+                f"color: {CREAM};"
+                f"border: 1px solid {TERRA};"
+                "border-radius: 12px;"
+                "padding: 8px 12px;"
+                'font-family: "Segoe UI", Arial, sans-serif;'
+                "font-size: 12px;"
+            )
+            self.bubble.hide()
+            v.addWidget(self.bubble, 0, Qt.AlignHCenter)
+
+            self.face = QLabel()
+            self.face.setAlignment(Qt.AlignCenter)
+            self.face.setToolTip("Argus — drag to move")
+            v.addWidget(self.face, 0, Qt.AlignHCenter)
+
+            # Cycle the event strip on its own cadence, like the device splash.
+            self._cycle = QTimer(self)
+            self._cycle.setInterval(BUDDY_EVENT_INTERVAL_MS)
+            self._cycle.timeout.connect(self._advance_bubble)
+
+        # ----- mood / pixmap -------------------------------------------------
+
+        def _pixmap_for(self, mood: str):
+            if mood in self._pix_cache:
+                return self._pix_cache[mood]
+            pm = None
+            path = resource_path("assets", "img", f"{mood}.png")
+            if path.exists():
+                raw = QPixmap(str(path))
+                if not raw.isNull():
+                    pm = raw.scaled(
+                        BUDDY_FACE_PX, BUDDY_FACE_PX,
+                        Qt.KeepAspectRatio, Qt.SmoothTransformation,
+                    )
+            self._pix_cache[mood] = pm
+            return pm
+
+        def _set_mood(self, mood: str):
+            if mood not in BUDDY_MOODS:
+                mood = "happy"
+            if mood == self._mood:
+                return
+            pm = self._pixmap_for(mood)
+            if pm is None:
+                return
+            self._mood = mood
+            self.face.setPixmap(pm)
+            self.adjustSize()
+
+        # ----- event bubble --------------------------------------------------
+
+        def _apply_bubble(self):
+            if not self._events:
+                self.bubble.hide()
+            else:
+                self.bubble.setText(self._events[self._event_idx % len(self._events)])
+                self.bubble.show()
+            self.adjustSize()
+
+        def _advance_bubble(self):
+            if not self._events:
+                return
+            self._event_idx = (self._event_idx + 1) % len(self._events)
+            self._apply_bubble()
+
+        def _set_events(self, events: list):
+            if events == self._events:
+                return
+            self._events = events
+            self._event_idx = 0
+            self._apply_bubble()
+
+        # ----- placement / drag ---------------------------------------------
+
+        def _place_initial(self):
+            """Restore the saved position, or default to the lower-right of the
+            primary screen."""
+            self._placed = True
+            pos = load_config().get("buddy_pos")
+            if isinstance(pos, (list, tuple)) and len(pos) == 2:
+                try:
+                    self.move(int(pos[0]), int(pos[1]))
+                    return
+                except (TypeError, ValueError):
+                    pass
+            screen = QApplication.primaryScreen()
+            if screen is not None:
+                geo = screen.availableGeometry()
+                self.adjustSize()
+                self.move(
+                    geo.right() - self.width() - 32,
+                    geo.bottom() - self.height() - 32,
+                )
+
+        def mousePressEvent(self, e):
+            if e.button() == Qt.LeftButton:
+                self._drag_off = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+                e.accept()
+
+        def mouseMoveEvent(self, e):
+            if self._drag_off is not None and (e.buttons() & Qt.LeftButton):
+                self.move(e.globalPosition().toPoint() - self._drag_off)
+                e.accept()
+
+        def mouseReleaseEvent(self, e):
+            if self._drag_off is not None:
+                self._drag_off = None
+                # Persist the new corner so it survives restarts.
+                cfg = load_config()
+                cfg["buddy_pos"] = [self.x(), self.y()]
+                save_config(cfg)
+                e.accept()
+
+        # ----- driven by the UI timer ---------------------------------------
+
+        def refresh(self):
+            snap = _snapshot_buddy()
+            connected = _snapshot_status().get("state") == "ok"
+            want = snap["enabled"] and connected
+
+            if want and not self.isVisible():
+                if not self._placed:
+                    self._set_mood(snap["mood"])
+                    self._set_events(snap["events"])
+                    self._place_initial()
+                self.show()
+                self.raise_()
+                self._cycle.start()
+            elif not want and self.isVisible():
+                self.hide()
+                self._cycle.stop()
+
+            if not want:
+                return
+            self._set_mood(snap["mood"])
+            self._set_events(snap["events"])
+
     win = Win()
+    buddy = Buddy()
+    set_buddy_enabled(load_config().get("desktop_buddy", False))
 
     # System tray icon -------------------------------------------------------
     tray = QSystemTrayIcon(icon, app)
@@ -1135,6 +1367,25 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
         win.activateWindow()
     act_show.triggered.connect(_show)
 
+    # Checkable buddy toggle — kept in sync with the System-tab checkbox and
+    # config so flipping it from either place agrees.
+    act_buddy = QAction("Desktop buddy", menu)
+    act_buddy.setCheckable(True)
+    act_buddy.setChecked(bool(load_config().get("desktop_buddy", False)))
+    win._act_buddy = act_buddy
+
+    def _toggle_buddy(checked: bool):
+        cfg = load_config()
+        cfg["desktop_buddy"] = bool(checked)
+        save_config(cfg)
+        set_buddy_enabled(checked)
+        if hasattr(win, "chk_buddy"):
+            win.chk_buddy.blockSignals(True)
+            win.chk_buddy.setChecked(checked)
+            win.chk_buddy.blockSignals(False)
+        buddy.refresh()
+    act_buddy.toggled.connect(_toggle_buddy)
+
     act_quit = QAction("Quit", menu)
     def _do_quit():
         stop_event.set()
@@ -1142,9 +1393,17 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
     act_quit.triggered.connect(_do_quit)
 
     menu.addAction(act_show)
+    menu.addAction(act_buddy)
     menu.addSeparator()
     menu.addAction(act_quit)
     tray.setContextMenu(menu)
+
+    # Drive the buddy's visibility/mood/events off a lightweight timer on the
+    # UI thread (the worker only ever writes the thread-safe buddy snapshot).
+    buddy_timer = QTimer(app)
+    buddy_timer.setInterval(400)
+    buddy_timer.timeout.connect(buddy.refresh)
+    buddy_timer.start()
 
     def _on_activated(reason):
         if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick):

@@ -90,7 +90,11 @@ The daemon polls Anthropic's rate-limit headers, parses local Claude Code conver
 
 The daemon checks the connection every 2 seconds and reconnects fast if you unplug, walk out of BLE range, or restart the board.
 
-The tray app is the way to run it on Windows. Closing the window hides to tray; right-click the tray icon → Quit to actually exit. The window shows live log output, the current connection status, and exposes every setting: GitHub token (encrypted at rest), Copilot org/enterprise + allowance, CI/CD auto-focus rules, which screens cycle and which Today panels show, brightness, power-save, device rename, transport, poll interval, and Start with Windows.
+The tray app is the way to run it on Windows. Closing the window hides to tray; right-click the tray icon → Quit to actually exit. The window shows live log output, the current connection status, and exposes every setting: GitHub token (encrypted at rest), Copilot org/enterprise + allowance, CI/CD auto-focus rules, which screens cycle and which Today panels show, brightness, power-save, the desktop buddy, device rename, transport, poll interval, and Start with Windows.
+
+### Desktop buddy
+
+Enable **Desktop buddy** (System tab → Display, or the tray menu) to put a small, always-on-top mascot on your computer that mirrors the device: it wears the same mood face the daemon ships to the screen and cycles the same event ticker in a little speech bubble. It only appears while an Argus device is connected, so it doubles as an at-a-glance link indicator. Drag it anywhere — the position is remembered across restarts.
 
 ## Prerequisites
 

@@ -410,6 +410,7 @@ def demo_payload() -> str:
     mood, events = _mood_and_events(fields)
     fields["md"]   = mood
     fields["evts"] = events
+    tray_ui.set_buddy_mood(mood, events)
     return json.dumps(fields, separators=(",", ":"))
 
 
@@ -919,6 +920,8 @@ def build_payload(api_token: str) -> str:
     mood, events = _mood_and_events(fields)
     fields["md"]   = mood
     fields["evts"] = events
+    # Mirror the same mood + events to the optional desktop buddy window.
+    tray_ui.set_buddy_mood(mood, events)
 
     focus = _detect_focus(fields, cfg)
     if focus:
