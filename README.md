@@ -177,6 +177,7 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 {
   "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
   "c": 3.47, "cw": 12.30, "mo": 45, "ms": 40, "mh": 5, "mf": 10,
+  "mow": 38, "msw": 42, "mhw": 8, "mfw": 12,
   "ch": 82, "tk": 234567, "se": 3, "pj": "argus",
   "ge": true, "gi": 4, "gp": 2,
   "cie": true, "cis": "fail", "cir": "argus", "cib": "main", "ciw": "build", "cif": 1, "ciq": 0,
@@ -195,7 +196,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 | `w` / `wr` | weekly % / minutes until it resets |
 | `st` / `ok` | rate-limit status / poll succeeded |
 | `c` / `cw` | USD spent today / in the last 7 days (API-equivalent) |
-| `mo` / `ms` / `mh` / `mf` | Opus / Sonnet / Haiku / Fable token share, % (all four are local-machine-only — see note below) |
+| `mo` / `ms` / `mh` / `mf` | Opus / Sonnet / Haiku / Fable token share today, % (all four are local-machine-only — see note below) |
+| `mow` / `msw` / `mhw` / `mfw` | Opus / Sonnet / Haiku / Fable token share this week (rolling 7 days), % — same local-only computation as `mo`/`ms`/`mh`/`mf`, just windowed weekly; `mfw` is the "Fable weekly %" bar shown on the Today screen and in `claude /usage` |
 | `ch` / `tk` / `se` | cache hit rate % / tokens today / distinct sessions today |
 | `pj` | most recently active project (basename) |
 | `ge` / `gi` / `gp` | GitHub enabled / open issues assigned / open PRs awaiting you |

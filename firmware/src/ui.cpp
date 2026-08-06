@@ -837,8 +837,15 @@ void ui_update(const UsageData* data) {
     }
     lv_label_set_text(lbl_today_cost, cost_buf);
 
-    char week_buf[24];
-    snprintf(week_buf, sizeof(week_buf), "Week: $%.2f", data->cost_week);
+    // Appends "Fable NN%" — the same weekly Fable share shown in `claude
+    // /usage`'s Fable bar, computed locally the same way the daily model
+    // split is (see docs/adr/0001-today-view-is-local-machine-only.md) —
+    // only when there is one, so the common case (no Fable usage) is unchanged.
+    char week_buf[48];
+    int wn = snprintf(week_buf, sizeof(week_buf), "Week: $%.2f", data->cost_week);
+    if (data->fable_pct_week > 0 && wn > 0 && (size_t)wn < sizeof(week_buf)) {
+        snprintf(week_buf + wn, sizeof(week_buf) - wn, "  -  Fable %d%%", (int)data->fable_pct_week);
+    }
     lv_label_set_text(lbl_today_week, week_buf);
 
     int cache_pct = data->cache_hit_pct;

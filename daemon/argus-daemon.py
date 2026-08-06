@@ -378,6 +378,10 @@ def demo_payload() -> str:
     sonnet = random.randint(10, 100 - opus)
     fable = random.randint(0, max(0, 100 - opus - sonnet))
     haiku = max(0, 100 - opus - sonnet - fable)
+    opus_w = random.randint(10, 50)
+    sonnet_w = random.randint(10, 100 - opus_w)
+    fable_w = random.randint(0, max(0, 100 - opus_w - sonnet_w))
+    haiku_w = max(0, 100 - opus_w - sonnet_w - fable_w)
     fields = {
         "s": sp, "sr": sr,
         "w": wp, "wr": wr,
@@ -385,6 +389,7 @@ def demo_payload() -> str:
         "c":  round(random.uniform(0.5, 8.0), 2),
         "cw": round(random.uniform(5.0, 60.0), 2),
         "mo": opus, "ms": sonnet, "mh": haiku, "mf": fable,
+        "mow": opus_w, "msw": sonnet_w, "mhw": haiku_w, "mfw": fable_w,
         "ch": random.randint(40, 95),
         "tk": random.randint(50_000, 800_000),
         "se": random.randint(1, 12),

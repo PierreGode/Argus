@@ -120,6 +120,10 @@ static bool parse_json(const char* json, UsageData* out) {
     out->sonnet_pct     = doc["ms"] | 0;
     out->haiku_pct      = doc["mh"] | 0;
     out->fable_pct      = doc["mf"] | 0;
+    out->opus_pct_week   = doc["mow"] | 0;
+    out->sonnet_pct_week = doc["msw"] | 0;
+    out->haiku_pct_week  = doc["mhw"] | 0;
+    out->fable_pct_week  = doc["mfw"] | 0;
     out->cache_hit_pct  = doc["ch"] | 0;
     out->tokens_today   = doc["tk"] | 0;
     out->sessions_today = doc["se"] | 0;

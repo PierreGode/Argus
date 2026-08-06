@@ -78,6 +78,9 @@ class Aggregates:
     by_model_today: dict[str, int] = field(default_factory=lambda: {
         "opus": 0, "sonnet": 0, "haiku": 0, "fable": 0, "other": 0,
     })
+    by_model_week: dict[str, int] = field(default_factory=lambda: {
+        "opus": 0, "sonnet": 0, "haiku": 0, "fable": 0, "other": 0,
+    })
     sessions_today: set[str] = field(default_factory=set)
     latest_project: str = ""
     latest_project_ts: float = 0.0
@@ -180,14 +183,16 @@ def aggregate(claude_dir: Path | None = None, now: float | None = None) -> Aggre
                 if not isinstance(cost, (int, float)):
                     cost = _line_cost(usage, pricing)
 
+                inp = usage.get("input_tokens", 0) or 0
+                out = usage.get("output_tokens", 0) or 0
+                cw  = usage.get("cache_creation_input_tokens", 0) or 0
+                cr  = usage.get("cache_read_input_tokens", 0) or 0
+                total = inp + out + cw + cr
+
                 agg.cost_week += cost
+                agg.by_model_week[family] += total
                 if ts >= today_start:
                     agg.cost_today += cost
-                    inp = usage.get("input_tokens", 0) or 0
-                    out = usage.get("output_tokens", 0) or 0
-                    cw  = usage.get("cache_creation_input_tokens", 0) or 0
-                    cr  = usage.get("cache_read_input_tokens", 0) or 0
-                    total = inp + out + cw + cr
                     agg.tokens_today += total
                     agg.input_today += inp
                     agg.cache_creation_today += cw
@@ -224,6 +229,15 @@ def to_payload_fields(agg: Aggregates) -> dict:
     else:
         opus_pct = sonnet_pct = haiku_pct = fable_pct = 0
 
+    counted_week = sum(agg.by_model_week.values())
+    if counted_week > 0:
+        opus_pct_week   = round(100 * agg.by_model_week["opus"]   / counted_week)
+        sonnet_pct_week = round(100 * agg.by_model_week["sonnet"] / counted_week)
+        haiku_pct_week  = round(100 * agg.by_model_week["haiku"]  / counted_week)
+        fable_pct_week  = round(100 * agg.by_model_week["fable"]  / counted_week)
+    else:
+        opus_pct_week = sonnet_pct_week = haiku_pct_week = fable_pct_week = 0
+
     cache_denom = agg.input_today + agg.cache_creation_today + agg.cache_read_today
     cache_pct = round(100 * agg.cache_read_today / cache_denom) if cache_denom else 0
 
@@ -234,6 +248,10 @@ def to_payload_fields(agg: Aggregates) -> dict:
         "ms": sonnet_pct,
         "mh": haiku_pct,
         "mf": fable_pct,
+        "mow": opus_pct_week,
+        "msw": sonnet_pct_week,
+        "mhw": haiku_pct_week,
+        "mfw": fable_pct_week,
         "ch": cache_pct,
         "tk": agg.tokens_today,
         "se": len(agg.sessions_today),
