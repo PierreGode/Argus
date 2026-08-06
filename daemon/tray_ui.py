@@ -28,6 +28,29 @@ from typing import Callable
 import token_crypt  # local module: DPAPI wrapper for the GitHub PAT
 
 
+# ----- Resource resolution --------------------------------------------------
+
+def resource_path(*rel: str) -> Path:
+    """Resolve a bundled data file across run-from-source and PyInstaller.
+
+    Under PyInstaller --onefile, datas are unpacked to a temp dir exposed as
+    `sys._MEIPASS`; the spec bundles assets there under `assets/...`. When run
+    from source, assets live one level up from this file (../assets/...).
+    Returns the first candidate that exists, else the source-tree path.
+    """
+    here = Path(__file__).resolve().parent
+    bases = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        bases.append(Path(meipass))
+    bases += [here.parent, here]
+    for base in bases:
+        cand = base.joinpath(*rel)
+        if cand.exists():
+            return cand
+    return bases[0].joinpath(*rel)
+
+
 # ----- Config file path -----------------------------------------------------
 
 APP_NAME = "Argus"
@@ -56,23 +79,21 @@ def config_path() -> Path:
 DEFAULTS = {
     "github_token": "",
     "copilot_org": "",         # GitHub org slug for Copilot seat lookup (status / editor / last activity)
-    "copilot_enterprise": "",  # GitHub Enterprise slug for premium-request usage endpoint
-    "copilot_allowance": 1000, # monthly premium-request allowance per plan (300/1000/300/1500)
+    "copilot_enterprise": "",  # Optional enterprise slug for enterprise-level AI usage consumption
+    "copilot_allowance": 3000,  # monthly included AI-credit pool for the org or billing entity
     "brightness": 100,         # 10..100 — software dim overlay on the device
     "transport": "ble",        # "ble" | "usb"
     "poll_interval": 60,       # seconds between Anthropic API polls
-    "enabled_apps": ["usage", "today", "github", "copilot"],  # which tabs cycle on the device
+    "power_save": False,       # blank the device LCD after an idle timeout (woken by changes/touch/button)
+    "enabled_apps": ["usage", "today", "github", "ci", "copilot"],  # which screens cycle on the device
+    "ci_focus_success": False,  # auto-focus the CI screen when a watched run goes green (off — green is noisy)
+    "ci_focus_fail": True,      # auto-focus when a watched run fails
+    "ci_focus_action": True,    # auto-focus when a run needs approval / action (environment protection)
+    "device_name": "Argus Controller",  # BLE name we advertise/scan for; rename so multiple Argus units don't collide
+    "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
+    "today_show_cost": True,   # Today screen: show the "API equiv." cost panel
+    "today_show_cache": True,  # Today screen: show the cache-hit panel (model split always shows)
 }
-
-# Premium-request monthly allowance by Copilot plan tier. The dropdown in
-# the Copilot settings tab maps to these values. Numbers come from the
-# user-provided example script + GitHub's published per-plan quotas.
-COPILOT_PLAN_PRESETS = [
-    ("Copilot Enterprise (1000)", 1000),
-    ("Copilot Business (300)",     300),
-    ("Copilot Pro (300)",          300),
-    ("Copilot Pro+ (1500)",       1500),
-]
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
 # membership of `enabled_apps`. Add a new app by appending here (and
@@ -81,6 +102,7 @@ APP_REGISTRY = [
     ("usage",   "Usage",   "Claude Code rate-limit + reset countdown."),
     ("today",   "Today",   "Cost, tokens, model split from your local Claude logs."),
     ("github",  "GitHub",  "Open issues + PRs waiting on you."),
+    ("ci",      "CI/CD",   "GitHub Actions workflow status across your recent repos."),
     ("copilot", "Copilot", "GitHub Copilot status, last activity, editor."),
 ]
 
@@ -393,6 +415,25 @@ QRadioButton, QCheckBox {{
 QRadioButton::indicator, QCheckBox::indicator {{
     width: 14px;
     height: 14px;
+    border: 2px solid {CREAM};
+    background: transparent;
+}}
+
+QRadioButton::indicator {{
+    border-radius: 9px;
+}}
+
+QCheckBox::indicator {{
+    border-radius: 4px;
+}}
+
+QRadioButton::indicator:hover, QCheckBox::indicator:hover {{
+    border-color: {TERRA_HOVER};
+}}
+
+QRadioButton::indicator:checked, QCheckBox::indicator:checked {{
+    border: 2px solid {TERRA};
+    background: {TERRA};
 }}
 
 QSlider::groove:horizontal {{
@@ -500,11 +541,12 @@ def _make_app_icon():
     from PySide6.QtCore import Qt, QSize, QPointF
     from PySide6.QtGui import QPixmap, QPainter, QColor, QPen, QIcon
 
-    # Locate assets/img/happy.png relative to the daemon source tree.
-    here = Path(__file__).resolve().parent
+    # Locate the mascot/icon — works both from source and inside a PyInstaller
+    # bundle (resource_path checks sys._MEIPASS). Prefer the multi-res .ico, then
+    # the mascot sprite.
     for candidate in (
-        here.parent / "assets" / "img" / "happy.png",
-        here / "assets" / "img" / "happy.png",
+        resource_path("assets", "argus.ico"),
+        resource_path("assets", "img", "happy.png"),
     ):
         if candidate.exists():
             pm = QPixmap(str(candidate))
@@ -540,7 +582,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
         QApplication, QMainWindow, QSystemTrayIcon, QMenu, QWidget,
         QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
         QGroupBox, QRadioButton, QButtonGroup, QSlider, QPlainTextEdit,
-        QFrame, QComboBox, QCheckBox, QTabWidget,
+        QFrame, QComboBox, QCheckBox, QTabWidget, QSpinBox,
     )
 
     app = QApplication.instance() or QApplication(sys.argv)
@@ -604,13 +646,15 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             # settings). Each app gets a dedicated tab with its own
             # "Show on device" checkbox + app-specific config. Adding a new
             # app = append to APP_REGISTRY + add a _build_<app>_tab() below.
+            # The Usage + Today screens are both Claude data, so they share one
+            # "Claude" tab (with the Today screen's per-element toggles). GitHub
+            # and Copilot keep their own tabs.
             self.chk_apps = {}
             self.tabs = QTabWidget()
             self.tabs.addTab(self._build_system_tab(cfg), "System")
-            for name, label, _desc in APP_REGISTRY:
-                builder = getattr(self, f"_build_{name}_tab", None)
-                page = builder(cfg) if builder else self._build_app_tab(cfg, name)
-                self.tabs.addTab(page, label)
+            self.tabs.addTab(self._build_claude_tab(cfg), "Claude")
+            self.tabs.addTab(self._build_github_tab(cfg), "GitHub")
+            self.tabs.addTab(self._build_copilot_tab(cfg), "Copilot")
             root.addWidget(self.tabs)
 
             # --- Live log -----------------------------------------------
@@ -646,10 +690,11 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
         # app-specific config widget block. Toggle state lands in
         # self.chk_apps[name] for _on_save_clicked() to read uniformly.
 
-        def _app_visibility_row(self, name: str, cfg: dict) -> QHBoxLayout:
+        def _app_visibility_row(self, name: str, cfg: dict,
+                                label: str = "Show on device") -> QHBoxLayout:
             row = QHBoxLayout()
             row.setSpacing(10)
-            chk = QCheckBox("Show on device")
+            chk = QCheckBox(label)
             chk.setChecked(name in (cfg.get("enabled_apps") or []))
             chk.setToolTip(
                 "Unchecked apps are hidden from the device's screen cycle. "
@@ -669,18 +714,43 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
 
             # Connection
             conn = QGroupBox("CONNECTION")
-            cl = QHBoxLayout()
-            cl.setSpacing(24)
+            cv = QVBoxLayout()
+            cv.setSpacing(12)
+
+            radios = QHBoxLayout()
+            radios.setSpacing(24)
             self.rb_ble = QRadioButton("Bluetooth (auto-discover)")
             self.rb_usb = QRadioButton("USB-C serial (auto-detect)")
             grp = QButtonGroup(self)
             grp.addButton(self.rb_ble)
             grp.addButton(self.rb_usb)
             (self.rb_usb if cfg["transport"] == "usb" else self.rb_ble).setChecked(True)
-            cl.addWidget(self.rb_ble)
-            cl.addWidget(self.rb_usb)
-            cl.addStretch()
-            conn.setLayout(cl)
+            radios.addWidget(self.rb_ble)
+            radios.addWidget(self.rb_usb)
+            radios.addStretch()
+            cv.addLayout(radios)
+
+            # Device name — lets a user with several Argus units give each a
+            # unique BLE name so the daemon doesn't grab the wrong one. Shows the
+            # pending rename target if one is in flight, else the live name.
+            name_row = QHBoxLayout()
+            name_row.setSpacing(14)
+            name_row.addWidget(QLabel("Device name"))
+            self.ed_name = QLineEdit(
+                cfg.get("pending_name") or cfg.get("device_name") or "Argus Controller")
+            self.ed_name.setMaxLength(24)
+            self.ed_name.setPlaceholderText("Argus Controller")
+            self.ed_name.setToolTip(
+                "The BLE name this Argus advertises and that the daemon searches "
+                "for. Give each device a unique name so multiple Argus units don't "
+                "collide. The new name is pushed the next time the daemon connects, "
+                "then the device reconnects under it."
+            )
+            name_row.addWidget(self.ed_name)
+            name_row.addStretch()
+            cv.addLayout(name_row)
+
+            conn.setLayout(cv)
             v.addWidget(conn)
 
             # Behavior
@@ -721,6 +791,9 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
 
             # Display
             disp = QGroupBox("DISPLAY")
+            dv = QVBoxLayout()
+            dv.setSpacing(10)
+
             dl = QHBoxLayout()
             dl.setSpacing(14)
             bright_lbl = QLabel("Brightness")
@@ -738,7 +811,20 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             )
             dl.addWidget(self.sl_bright, stretch=1)
             dl.addWidget(self.lbl_bright)
-            disp.setLayout(dl)
+            dv.addLayout(dl)
+
+            # Power save — blank the LCD after an idle period.
+            self.chk_power_save = QCheckBox("Power save (turn the screen off when idle)")
+            self.chk_power_save.setChecked(bool(cfg.get("power_save", False)))
+            self.chk_power_save.setToolTip(
+                "Blanks the device's LCD backlight after ~5 minutes with no "
+                "changes (or poll interval + 1 min, whichever is longer). It "
+                "wakes on any Claude / GitHub / Copilot change, a screen touch, "
+                "or a button press."
+            )
+            dv.addWidget(self.chk_power_save)
+
+            disp.setLayout(dv)
             v.addWidget(disp)
 
             v.addStretch()
@@ -763,11 +849,57 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             v.addStretch()
             return page
 
-        def _build_usage_tab(self, cfg: dict) -> QWidget:
-            return self._build_app_tab(cfg, "usage")
+        def _build_claude_tab(self, cfg: dict) -> QWidget:
+            """Claude screens: which of the two Claude screens (Usage rate limits
+            / Today token spend) cycle on the device, plus per-element toggles
+            for the Today screen."""
+            page = QWidget()
+            v = QVBoxLayout(page)
+            v.setContentsMargins(8, 8, 8, 8)
+            v.setSpacing(12)
 
-        def _build_today_tab(self, cfg: dict) -> QWidget:
-            return self._build_app_tab(cfg, "today")
+            # Which Claude screens appear in the device's cycle.
+            screens = QGroupBox("SCREENS ON DEVICE")
+            sv = QVBoxLayout()
+            sv.setSpacing(8)
+            sv.addLayout(self._app_visibility_row(
+                "usage", cfg, "Usage — rate limits & reset countdowns"))
+            sv.addLayout(self._app_visibility_row(
+                "today", cfg, "Today — token spend, cache, model split"))
+            screens.setLayout(sv)
+            v.addWidget(screens)
+
+            # Per-element toggles for the Today screen.
+            elems = QGroupBox("TODAY SCREEN ELEMENTS")
+            ev = QVBoxLayout()
+            ev.setSpacing(8)
+            self.chk_today_cost = QCheckBox("API-equivalent cost")
+            self.chk_today_cost.setChecked(bool(cfg.get("today_show_cost", True)))
+            self.chk_today_cost.setToolTip(
+                "Show the 'API equiv.' panel (today's cost + the 7-day total) on "
+                "the Today screen."
+            )
+            ev.addWidget(self.chk_today_cost)
+            self.chk_today_cache = QCheckBox("Cache hit rate")
+            self.chk_today_cache.setChecked(bool(cfg.get("today_show_cache", True)))
+            self.chk_today_cache.setToolTip(
+                "Show the cache-hit % and bar on the Today screen. The model "
+                "split (Opus / Sonnet / Haiku) stays visible either way."
+            )
+            ev.addWidget(self.chk_today_cache)
+            hint = QLabel(
+                "Uncheck to hide that element from the Today screen; the rest "
+                "slides up to fill the space. The model split always shows. To "
+                "hide the whole screen, uncheck Today above."
+            )
+            hint.setObjectName("muted")
+            hint.setWordWrap(True)
+            ev.addWidget(hint)
+            elems.setLayout(ev)
+            v.addWidget(elems)
+
+            v.addStretch()
+            return page
 
         def _build_github_tab(self, cfg: dict) -> QWidget:
             page = QWidget()
@@ -794,6 +926,51 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             gl.addWidget(hint)
             gh.setLayout(gl)
             v.addWidget(gh)
+
+            # CI/CD (GitHub Actions) — its own device screen, with per-event
+            # auto-focus rules as sub-options under its enable checkbox.
+            ci = QGroupBox("CI/CD status (GitHub Actions)")
+            cil = QVBoxLayout()
+            cil.setSpacing(8)
+            cil.addLayout(self._app_visibility_row(
+                "ci", cfg, "Show CI/CD status on device"))
+
+            af = QLabel("Auto-focus the device on the CI/CD screen when:")
+            af.setObjectName("muted")
+            cil.addWidget(af)
+
+            self.chk_ci_focus_fail = QCheckBox("A workflow run fails")
+            self.chk_ci_focus_fail.setChecked(bool(cfg.get("ci_focus_fail", True)))
+            cil.addWidget(self.chk_ci_focus_fail)
+
+            self.chk_ci_focus_action = QCheckBox(
+                "A run needs approval / action (environment protection rule)")
+            self.chk_ci_focus_action.setChecked(bool(cfg.get("ci_focus_action", True)))
+            cil.addWidget(self.chk_ci_focus_action)
+
+            self.chk_ci_focus_success = QCheckBox("A workflow run succeeds")
+            self.chk_ci_focus_success.setChecked(bool(cfg.get("ci_focus_success", False)))
+            cil.addWidget(self.chk_ci_focus_success)
+
+            ci_hint = QLabel(
+                "Watches the latest run of your most recently pushed repos "
+                "(reuses the token above — needs Actions: read). Auto-focus only "
+                "fires while the CI/CD screen is enabled."
+            )
+            ci_hint.setObjectName("muted")
+            ci_hint.setWordWrap(True)
+            cil.addWidget(ci_hint)
+            ci.setLayout(cil)
+            v.addWidget(ci)
+
+            # Grey out the auto-focus sub-options unless CI/CD is enabled.
+            def _sync_ci(on: bool):
+                for w in (self.chk_ci_focus_fail, self.chk_ci_focus_action,
+                          self.chk_ci_focus_success):
+                    w.setEnabled(on)
+            self.chk_apps["ci"].toggled.connect(_sync_ci)
+            _sync_ci(self.chk_apps["ci"].isChecked())
+
             v.addStretch()
             return page
 
@@ -814,7 +991,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             hint = QLabel(
                 "Org slug → drives seat status, last activity and editor. "
                 "Reuses the GitHub PAT from the GitHub tab; PAT needs "
-                "admin / Copilot Business seat-read on this org."
+                "admin / seat access on this org."
             )
             hint.setObjectName("muted")
             hint.setWordWrap(True)
@@ -822,38 +999,34 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             cp.setLayout(cl)
             v.addWidget(cp)
 
-            ent = QGroupBox("Enterprise (premium requests)")
+            ent = QGroupBox("AI usage")
             el = QVBoxLayout()
             el.setSpacing(8)
+
             self.ed_copilot_enterprise = QLineEdit(cfg.get("copilot_enterprise", ""))
-            self.ed_copilot_enterprise.setPlaceholderText("github enterprise slug (e.g. My-Enterprise)")
+            self.ed_copilot_enterprise.setPlaceholderText("optional enterprise slug (e.g. my-enterprise)")
             el.addWidget(self.ed_copilot_enterprise)
 
-            # Plan / allowance dropdown — picks the monthly premium-request
-            # quota the device divides usage against. Keep in sync with
-            # copilot_stats.ALLOWANCE_BY_PLAN.
             plan_row = QHBoxLayout()
             plan_row.setSpacing(10)
-            plan_lbl = QLabel("Plan")
+            plan_lbl = QLabel("Pool")
             plan_lbl.setMinimumWidth(60)
             plan_row.addWidget(plan_lbl)
-            self.cb_copilot_plan = QComboBox()
-            current_allowance = int(cfg.get("copilot_allowance") or DEFAULTS["copilot_allowance"])
-            sel = 0
-            for i, (label, alw) in enumerate(COPILOT_PLAN_PRESETS):
-                self.cb_copilot_plan.addItem(label, alw)
-                if alw == current_allowance:
-                    sel = i
-            self.cb_copilot_plan.setCurrentIndex(sel)
-            plan_row.addWidget(self.cb_copilot_plan, stretch=1)
+            self.sp_copilot_allowance = QSpinBox()
+            self.sp_copilot_allowance.setRange(0, 10_000_000)
+            self.sp_copilot_allowance.setSingleStep(100)
+            self.sp_copilot_allowance.setValue(
+                int(cfg.get("copilot_allowance") or DEFAULTS["copilot_allowance"])
+            )
+            self.sp_copilot_allowance.setSuffix(" credits")
+            plan_row.addWidget(self.sp_copilot_allowance, stretch=1)
             el.addLayout(plan_row)
 
             hint_e = QLabel(
-                "Enterprise slug → drives the \"Premium requests X/Y "
-                "(NN%)\" display. Needs a PAT with enterprise billing read "
-                "access. Leave blank if your Copilot Business org isn't "
-                "under an enclosing enterprise — the percentage panel will "
-                "just be hidden."
+                "Leave enterprise blank to read AI usage from the org. Set an "
+                "enterprise slug to read enterprise-wide consumption instead. "
+                "Pool is the total monthly included AI-credit allowance GitHub "
+                "shows for that billing entity."
             )
             hint_e.setObjectName("muted")
             hint_e.setWordWrap(True)
@@ -895,18 +1068,41 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             interval = int(self.cb_interval.currentData() or 60)
             enabled = [name for name, _, _ in APP_REGISTRY
                        if self.chk_apps[name].isChecked()]
+
+            # Device-name rename. We never change device_name at save time; the
+            # desired name rides in pending_name and the worker promotes it once a
+            # payload carrying it has been delivered. Queueing works whether or not
+            # the device is currently connected — it applies on the next connect.
+            prev = load_config()
+            current_name = (prev.get("device_name") or "Argus Controller").strip() \
+                or "Argus Controller"
+            prev_pending = (prev.get("pending_name") or "").strip()
+            typed = self.ed_name.text().strip() or "Argus Controller"
+            pending_name = "" if typed == current_name else typed
+
             new_cfg = {
                 "github_token":       self.ed_token.text().strip(),
                 "copilot_org":        self.ed_copilot_org.text().strip(),
                 "copilot_enterprise": self.ed_copilot_enterprise.text().strip(),
-                "copilot_allowance":  int(self.cb_copilot_plan.currentData()
-                                         or DEFAULTS["copilot_allowance"]),
+                "copilot_allowance":  int(self.sp_copilot_allowance.value()),
                 "brightness":         int(self.sl_bright.value()),
                 "transport":          "usb" if self.rb_usb.isChecked() else "ble",
                 "poll_interval":      max(5, interval),
+                "power_save":         self.chk_power_save.isChecked(),
                 "enabled_apps":       enabled,
+                "device_name":        current_name,
+                "pending_name":       pending_name,
+                "today_show_cost":    self.chk_today_cost.isChecked(),
+                "today_show_cache":   self.chk_today_cache.isChecked(),
+                "ci_focus_fail":      self.chk_ci_focus_fail.isChecked(),
+                "ci_focus_action":    self.chk_ci_focus_action.isChecked(),
+                "ci_focus_success":   self.chk_ci_focus_success.isChecked(),
             }
             save_config(new_cfg)
+            if pending_name and pending_name != prev_pending:
+                self.log_view.appendPlainText(
+                    f"[ui] rename to '{pending_name}' queued — applies on the next connect"
+                )
             if autostart_supported():
                 ok = set_autostart(self.chk_autostart.isChecked())
                 if not ok:

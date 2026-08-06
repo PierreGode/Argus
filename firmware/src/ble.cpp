@@ -2,8 +2,29 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <NimBLEHIDDevice.h>
+#include <Preferences.h>
 
-#define DEVICE_NAME "Argus Controller"
+// Default advertised name. The live name is held in `device_name` and may be
+// overridden by the daemon (see ble_set_device_name) so multiple Argus units
+// on the same desk don't all answer to "Argus Controller". Persisted in NVS.
+#define DEFAULT_DEVICE_NAME "Argus Controller"
+#define NAME_NVS_NS         "argus"
+#define NAME_NVS_KEY        "ble_name"
+#define NAME_MAX_LEN        32
+
+static char device_name[NAME_MAX_LEN + 1] = DEFAULT_DEVICE_NAME;
+
+// Load the persisted name from NVS into `device_name`, falling back to the
+// default when unset/empty. Called once before NimBLEDevice::init().
+static void load_device_name() {
+    Preferences prefs;
+    if (!prefs.begin(NAME_NVS_NS, true)) return;  // read-only; namespace may not exist yet
+    String n = prefs.getString(NAME_NVS_KEY, DEFAULT_DEVICE_NAME);
+    prefs.end();
+    n.trim();
+    if (n.length() == 0) n = DEFAULT_DEVICE_NAME;
+    strlcpy(device_name, n.c_str(), sizeof(device_name));
+}
 
 // Custom GATT UUIDs for data channel
 #define SERVICE_UUID        "4c41555a-4465-7669-6365-000000000001"
@@ -11,7 +32,11 @@
 #define TX_CHAR_UUID        "4c41555a-4465-7669-6365-000000000003"  // device ack/nack notifies
 #define REQ_CHAR_UUID       "4c41555a-4465-7669-6365-000000000004"  // device-initiated refresh request
 
-#define BLE_BUF_SIZE 512
+// Holds one full reassembled payload. The daemon streams the JSON across
+// several writes (a single GATT attribute value can't exceed 512 octets) and
+// terminates it with '\n'; we accumulate chunks until that newline. Sized well
+// above the largest realistic payload so growth has headroom.
+#define BLE_BUF_SIZE 1024
 
 // HID keyboard report descriptor
 static const uint8_t HID_REPORT_MAP[] = {
@@ -50,7 +75,9 @@ static NimBLECharacteristic* req_char = nullptr;
 
 static ble_state_t state = BLE_STATE_INIT;
 static bool need_advertise = false;
-static char rx_buf[BLE_BUF_SIZE];
+static char rx_buf[BLE_BUF_SIZE];          // last complete payload, handed to the main loop
+static char rx_accum[BLE_BUF_SIZE];        // chunks assembled until the '\n' terminator
+static size_t rx_accum_len = 0;
 static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
 static char mac_str[18];
@@ -61,7 +88,7 @@ static void start_advertising() {
     adv->addServiceUUID(SERVICE_UUID);
     adv->setAppearance(HID_KEYBOARD);
     adv->enableScanResponse(true);
-    adv->setName(DEVICE_NAME);
+    adv->setName(device_name);
     bool ok = adv->start();
     state = BLE_STATE_ADVERTISING;
     Serial.printf("BLE: advertising start=%s\n", ok ? "OK" : "FAILED");
@@ -76,20 +103,38 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     void onDisconnect(NimBLEServer* s, NimBLEConnInfo& info, int reason) override {
         state = BLE_STATE_DISCONNECTED;
         need_advertise = true;
+        rx_accum_len = 0;  // drop any half-received payload so the next link starts clean
         Serial.printf("BLE: disconnected (reason=%d)\n", reason);
     }
 
 };
 
 class RxCallbacks : public NimBLECharacteristicCallbacks {
+    // The daemon streams each JSON payload as one or more writes terminated by
+    // '\n'. We append bytes until we see that newline, then publish the
+    // assembled message. json.dumps escapes any newline inside the data, so the
+    // only raw '\n' on the wire is the terminator. A single un-chunked write
+    // (small payload) still works — it just arrives with its newline in one go.
     void onWrite(NimBLECharacteristic* chr, NimBLEConnInfo& info) override {
         std::string val = chr->getValue();
-        size_t len = val.length();
-        if (len >= BLE_BUF_SIZE) len = BLE_BUF_SIZE - 1;
-        memcpy(rx_buf, val.c_str(), len);
-        rx_buf[len] = '\0';
-        data_ready = true;
-        has_received_data = true;
+        const char* data = val.data();
+        size_t n = val.length();
+        for (size_t i = 0; i < n; i++) {
+            char c = data[i];
+            if (c == '\n') {
+                if (rx_accum_len > 0) {
+                    memcpy(rx_buf, rx_accum, rx_accum_len);
+                    rx_buf[rx_accum_len] = '\0';
+                    data_ready = true;
+                    has_received_data = true;
+                }
+                rx_accum_len = 0;
+            } else if (rx_accum_len < BLE_BUF_SIZE - 1) {
+                rx_accum[rx_accum_len++] = c;
+            } else {
+                rx_accum_len = 0;  // overflow with no terminator — drop and resync
+            }
+        }
     }
 };
 
@@ -106,7 +151,8 @@ class ReqCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 void ble_init(void) {
-    NimBLEDevice::init(DEVICE_NAME);
+    load_device_name();
+    NimBLEDevice::init(device_name);
     NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, no MITM, SC
     // Preferred ATT MTU. Default is 23 (20 bytes/write-without-response) which
     // truncates any payload bigger than ~20 chars — and our JSON has been over
@@ -177,7 +223,33 @@ ble_state_t ble_get_state(void) {
 }
 
 const char* ble_get_device_name(void) {
-    return DEVICE_NAME;
+    return device_name;
+}
+
+bool ble_set_device_name(const char* name) {
+    if (!name) return false;
+
+    char clean[NAME_MAX_LEN + 1];
+    strlcpy(clean, name, sizeof(clean));
+    // Trim trailing spaces so a stray " " from the daemon doesn't churn NVS.
+    for (int i = (int)strlen(clean) - 1; i >= 0 && clean[i] == ' '; --i) clean[i] = '\0';
+
+    if (clean[0] == '\0') return false;                 // never advertise an empty name
+    if (strcmp(clean, device_name) == 0) return false;  // unchanged — no-op
+
+    strlcpy(device_name, clean, sizeof(device_name));
+
+    Preferences prefs;
+    if (prefs.begin(NAME_NVS_NS, false)) {              // read-write
+        prefs.putString(NAME_NVS_KEY, device_name);
+        prefs.end();
+    }
+
+    // Update the GAP Device Name characteristic now; advertising adopts the new
+    // name on the next start_advertising() (i.e. after the current link drops).
+    NimBLEDevice::setDeviceName(device_name);
+    Serial.printf("BLE: device name -> '%s' (advertised on next reconnect)\n", device_name);
+    return true;
 }
 
 const char* ble_get_mac_address(void) {

@@ -11,3 +11,12 @@ firmware/.vscode/
 # Node tooling deps (npm install --no-save)
 tools/node_modules/
 tools/package-lock.json
+
+# Python / PyInstaller / WiX build artifacts
+__pycache__/
+*.pyc
+/dist/
+/build/
+*.wixpdb
+daemon/packaging/windows/bin/
+daemon/packaging/windows/obj/

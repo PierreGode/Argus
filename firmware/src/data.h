@@ -21,11 +21,22 @@ struct UsageData {
     uint32_t tokens_today;   // total tokens consumed today (input + output + cache_*)
     uint16_t sessions_today; // number of distinct conversation files touched today
     char project[28];        // basename of most-recently-active project
+    bool today_show_cost;    // show the "API equiv." cost panel on the Today screen
+    bool today_show_cache;   // show the cache-hit panel on the Today screen (model split always shows)
 
     // ---- GitHub page (optional — daemon only populates if a PAT is set) ----
     uint16_t github_issues;  // open issues assigned to the user
     uint16_t github_prs;     // open PRs awaiting the user's review or owned by them
     bool github_enabled;     // true when the daemon has a PAT and is polling GH
+
+    // ---- CI/CD page (GitHub Actions; reuses the GitHub PAT) ----
+    bool ci_enabled;         // daemon is polling CI and the lookup succeeded
+    char ci_status[6];       // headline run: "ok"|"fail"|"run"|"wait"|"none"
+    char ci_repo[28];        // headline run repo (basename)
+    char ci_branch[24];      // headline run branch
+    char ci_workflow[28];    // headline run workflow name
+    uint16_t ci_failing;     // # of watched repos whose latest run failed
+    uint16_t ci_waiting;     // # waiting on approval / action (environment protection)
 
     // ---- Copilot page (requires Copilot Business org admin scope on the PAT) ----
     bool copilot_enabled;    // daemon has the org configured + last seat lookup ok
@@ -33,16 +44,16 @@ struct UsageData {
     char copilot_when[16];   // "5 min ago" / "2 hours ago" / "3 days ago" / "—"
     char copilot_editor[16]; // "VS Code" / "JetBrains" / "Neovim" / "" if unknown
 
-    // Premium-request usage block. Sourced from the GitHub Enterprise
-    // billing endpoint via copilot_stats.fetch_premium_usage(). Only
-    // populated when an enterprise slug is configured AND the PAT has
-    // billing-read scope on it; otherwise copilot_premium_ok = false
-    // and the firmware hides the panel.
+    // AI-credits usage block. Sourced from the org billing usage summary
+    // plus the org premium-request breakdown via
+    // copilot_stats.fetch_premium_usage(). Variable names still use the
+    // historical "premium" prefix to keep the wire format stable.
     bool     copilot_premium_ok;
     float    copilot_premium_pct;       // 0.0 .. 100.0+
-    uint16_t copilot_premium_used;      // requests this month
-    uint16_t copilot_premium_allowance; // monthly cap (300 / 1000 / 1500)
-    char     copilot_top_model[32];     // e.g. "Claude Opus 4.6"
+    uint32_t copilot_premium_used;      // included AI credits consumed this month
+    uint32_t copilot_premium_allowance; // configured monthly included pool (can exceed 65535)
+    char     copilot_premium_scope[12]; // "org" or "enterprise"
+    char     copilot_top_model[32];     // e.g. "GPT-5.4"
 
     // ---- Enabled-apps CSV ("usage,today,github,copilot") ----
     // Daemon publishes the user's chosen visibility list every payload. UI
@@ -52,6 +63,15 @@ struct UsageData {
 
     // ---- Display ----
     uint8_t brightness;      // 0-100 (software dim overlay; 100 = full bright)
+
+    // ---- Power save ----
+    // When enabled, the firmware blanks the LCD backlight (AXP2101 DLDO1) after
+    // power_save_secs of no activity. "Activity" = a meaningful data change
+    // (the daemon's `changed` flag), a touch, or a button press. The daemon
+    // computes the timeout (poll-aware: max(5min, poll_interval + 1min)).
+    bool     power_save;        // master enable
+    uint32_t power_save_secs;   // idle timeout in seconds
+    bool     changed;           // daemon flagged a substantive change this poll
 
     // ---- Auto-focus ----
     // Daemon sets this to a screen name ("github", "today", "usage", …) when

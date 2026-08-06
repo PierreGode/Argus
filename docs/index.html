@@ -79,9 +79,9 @@
           over BLE (or USB-C — pass <code class="cli">--serial</code> to auto-detect the board).
         </p>
         <div class="daemon-grid">
-          <a class="dl" href="daemon/argus-daemon-windows.exe" download>
+          <a class="dl" href="daemon/Argus-Setup.msi" download>
             <span class="os">Windows</span>
-            <span class="name">argus-daemon.exe</span>
+            <span class="name">Argus-Setup.msi</span>
           </a>
           <a class="dl" href="daemon/argus-daemon-macos" download>
             <span class="os">macOS</span>
@@ -92,6 +92,14 @@
             <span class="name">argus-daemon</span>
           </a>
         </div>
+        <p class="hint hint-spaced">
+          <strong>Windows:</strong> the installer adds Argus to the Start menu and
+          Apps &amp; features. It's per-machine, so it asks for admin rights. These
+          builds aren't signed with a commercial certificate, so Windows shows an
+          “unknown publisher” prompt and SmartScreen may warn on first run — choose
+          <em>More info → Run anyway</em>. Prefer no install? Grab the
+          <a href="daemon/argus-daemon-windows.exe" download>portable .exe</a>.
+        </p>
         <p class="hint hint-spaced">
           <strong>macOS / Linux:</strong> run <code>chmod +x argus-daemon</code> first.
           On macOS, Gatekeeper may require right-click → Open the first time

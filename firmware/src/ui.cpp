@@ -53,6 +53,14 @@ static lv_obj_t* lbl_gh_issues;
 static lv_obj_t* lbl_gh_prs;
 static lv_obj_t* lbl_gh_status;
 
+// ---- CI/CD screen widgets ----
+static lv_obj_t* ci_container;
+static lv_obj_t* lbl_ci_status;    // big headline word: PASSING / FAILING / RUNNING / ACTION / —
+static lv_obj_t* lbl_ci_repo;      // "repo · branch" of the headline run
+static lv_obj_t* lbl_ci_failing;   // big failing-run count
+static lv_obj_t* lbl_ci_waiting;   // "N waiting approval" sub-line
+static lv_obj_t* lbl_ci_hint;      // workflow name / token hint at the bottom
+
 // ---- Brightness dim overlay (full-screen semi-transparent rect on top) ----
 // Sits above every screen, intercepts no events, opacity is set from the
 // daemon's brightness field. 0 = pitch black, 100 = invisible.
@@ -60,25 +68,36 @@ static lv_obj_t* dim_overlay;
 
 // ---- Today screen widgets ----
 static lv_obj_t* today_container;
+static lv_obj_t* p_cost_panel;       // "API equiv." cost panel (toggle: today_show_cost)
 static lv_obj_t* lbl_today_cost;
 static lv_obj_t* lbl_today_week;
+static lv_obj_t* p_cache_panel;      // cache-hit panel; also hosts the model-split line
+static lv_obj_t* pill_today_cache;   // "Cache" pill (hidden with the cache toggle)
 static lv_obj_t* lbl_today_cache_pct;
 static lv_obj_t* bar_today_cache;
-static lv_obj_t* lbl_today_models;
+static lv_obj_t* lbl_today_models;   // Opus/Sonnet/Haiku split — kept visible even when cache is hidden
 
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
 static lv_obj_t* copilot_container;
-// Copilot screen — single big "Premium requests / NN.N%" panel, top-model
+// Copilot screen — single big "AI credits / NN.N%" panel, top-model
 // line, and a single-row status strip at the bottom.
 static lv_obj_t* lbl_cp_premium_pct;     // huge "60.4%"
 static lv_obj_t* lbl_cp_premium_counts;  // "604 / 1000 this month"
+static lv_obj_t* lbl_cp_scope_pill;      // "Org" / "Enterprise"
 static lv_obj_t* lbl_cp_top_model;       // "Claude Opus 4.6"
 static lv_obj_t* lbl_cp_strip;           // bottom row "VS Code · 5 min ago"
 static lv_obj_t* lbl_cp_hint;            // fallback hint when nothing is wired
 static lv_obj_t* lbl_ble_status;
 static lv_obj_t* lbl_ble_device;
 static lv_obj_t* lbl_ble_mac;
+
+// ---- Battery indicator (top-right, floats over every screen) ----
+static lv_obj_t* batt_box   = nullptr;   // transparent container on the top layer
+static lv_obj_t* batt_label = nullptr;   // "85%"
+static lv_obj_t* batt_shell = nullptr;   // battery outline
+static lv_obj_t* batt_bar   = nullptr;   // fill level
+static lv_obj_t* batt_nub   = nullptr;   // terminal nub
 
 // ---- Shared ----
 static screen_t current_screen = SCREEN_USAGE;
@@ -261,6 +280,7 @@ static void init_today_screen(lv_obj_t* scr) {
 
     // Panel 1 — cost today
     lv_obj_t* p_cost = make_panel(today_container, MARGIN, CONTENT_Y, CONTENT_W, PANEL_H);
+    p_cost_panel = p_cost;
     lbl_today_cost = lv_label_create(p_cost);
     lv_label_set_text(lbl_today_cost, "No data");
     lv_obj_set_style_text_font(lbl_today_cost, &font_styrene_48, 0);
@@ -282,6 +302,7 @@ static void init_today_screen(lv_obj_t* scr) {
     lv_obj_t* p_cache = make_panel(today_container, MARGIN,
                                    CONTENT_Y + PANEL_H + PANEL_GAP,
                                    CONTENT_W, PANEL_H);
+    p_cache_panel = p_cache;
     lbl_today_cache_pct = lv_label_create(p_cache);
     lv_label_set_text(lbl_today_cache_pct, "No data");
     lv_obj_set_style_text_font(lbl_today_cache_pct, &font_styrene_48, 0);
@@ -290,6 +311,7 @@ static void init_today_screen(lv_obj_t* scr) {
 
     lv_obj_t* pill_cache = make_pill(p_cache, "Cache");
     lv_obj_align(pill_cache, LV_ALIGN_TOP_RIGHT, 0, 1);
+    pill_today_cache = pill_cache;
 
     bar_today_cache = make_bar(p_cache, 0, 56, CONTENT_W - 32, 24);
 
@@ -303,6 +325,43 @@ static void init_today_screen(lv_obj_t* scr) {
     // init_usage_screen's lbl_usage_footer.)
 
     lv_obj_add_flag(today_container, LV_OBJ_FLAG_HIDDEN);
+}
+
+// Apply the daemon's Today-screen element toggles. The cost ("API equiv.")
+// panel can be hidden entirely; the cache panel collapses to just the
+// model-split line (Opus/Sonnet/Haiku), which we always keep visible. Whatever
+// remains slides up to the top slot so there's never a gap.
+#define MODEL_PANEL_H 56
+
+static void today_apply_layout(bool show_cost, bool show_cache) {
+    int y = CONTENT_Y;
+
+    // Cost panel — hidden outright when off (its children hide with it).
+    if (show_cost) {
+        lv_obj_clear_flag(p_cost_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(p_cost_panel, y);
+        y += PANEL_H + PANEL_GAP;
+    } else {
+        lv_obj_add_flag(p_cost_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    // Cache panel stays present because it hosts the model-split line. When
+    // cache is off we hide the cache visuals and shrink the panel to one line.
+    lv_obj_clear_flag(p_cache_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_y(p_cache_panel, y);
+    if (show_cache) {
+        lv_obj_set_height(p_cache_panel, PANEL_H);
+        lv_obj_clear_flag(lbl_today_cache_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(bar_today_cache,     LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(pill_today_cache,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(lbl_today_models, 94);
+    } else {
+        lv_obj_set_height(p_cache_panel, MODEL_PANEL_H);
+        lv_obj_add_flag(lbl_today_cache_pct, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(bar_today_cache,     LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_flag(pill_today_cache,    LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_y(lbl_today_models, 0);
+    }
 }
 
 // ======== GitHub Screen (480x480) ========
@@ -372,6 +431,74 @@ static void init_github_screen(lv_obj_t* scr) {
     lv_obj_add_flag(github_container, LV_OBJ_FLAG_HIDDEN);
 }
 
+// ======== CI/CD Screen (480x480) ========
+//
+// GitHub Actions across the user's recently-pushed repos. Panel 1 = a big
+// headline status word for the most noteworthy run (waiting > failing > newest)
+// with its repo/branch; Panel 2 = the failing count + a "waiting approval"
+// line; the bottom line shows the workflow name or a hint. Fed by the daemon's
+// "ci_*" payload fields.
+static void init_ci_screen(lv_obj_t* scr) {
+    ci_container = lv_obj_create(scr);
+    lv_obj_set_size(ci_container, SCR_W, SCR_H);
+    lv_obj_set_pos(ci_container, 0, 0);
+    lv_obj_set_style_bg_opa(ci_container, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ci_container, 0, 0);
+    lv_obj_set_style_pad_all(ci_container, 0, 0);
+    lv_obj_clear_flag(ci_container, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ci_container, global_click_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t* lbl_title = lv_label_create(ci_container);
+    lv_label_set_text(lbl_title, "CI/CD");
+    lv_obj_set_style_text_font(lbl_title, &font_tiempos_56, 0);
+    lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
+
+    // Panel 1 — headline status word + repo/branch
+    lv_obj_t* p_status = make_panel(ci_container, MARGIN, CONTENT_Y, CONTENT_W, PANEL_H);
+    lbl_ci_status = lv_label_create(p_status);
+    lv_label_set_text(lbl_ci_status, "No data");
+    lv_obj_set_style_text_font(lbl_ci_status, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_ci_status, COL_TEXT, 0);
+    lv_obj_set_pos(lbl_ci_status, 0, 0);
+
+    lv_obj_t* pill_status = make_pill(p_status, "Build");
+    lv_obj_align(pill_status, LV_ALIGN_TOP_RIGHT, 0, 1);
+
+    lbl_ci_repo = lv_label_create(p_status);
+    lv_label_set_text(lbl_ci_repo, "");
+    lv_obj_set_style_text_font(lbl_ci_repo, &font_styrene_28, 0);
+    lv_obj_set_style_text_color(lbl_ci_repo, COL_DIM, 0);
+    lv_obj_set_pos(lbl_ci_repo, 0, 94);
+
+    // Panel 2 — failing count + waiting line
+    lv_obj_t* p_fail = make_panel(ci_container, MARGIN,
+                                  CONTENT_Y + PANEL_H + PANEL_GAP,
+                                  CONTENT_W, PANEL_H);
+    lbl_ci_failing = lv_label_create(p_fail);
+    lv_label_set_text(lbl_ci_failing, "0");
+    lv_obj_set_style_text_font(lbl_ci_failing, &font_styrene_48, 0);
+    lv_obj_set_style_text_color(lbl_ci_failing, COL_TEXT, 0);
+    lv_obj_set_pos(lbl_ci_failing, 0, 0);
+
+    lv_obj_t* pill_fail = make_pill(p_fail, "Failing");
+    lv_obj_align(pill_fail, LV_ALIGN_TOP_RIGHT, 0, 1);
+
+    lbl_ci_waiting = lv_label_create(p_fail);
+    lv_label_set_text(lbl_ci_waiting, "");
+    lv_obj_set_style_text_font(lbl_ci_waiting, &font_styrene_28, 0);
+    lv_obj_set_style_text_color(lbl_ci_waiting, COL_DIM, 0);
+    lv_obj_set_pos(lbl_ci_waiting, 0, 94);
+
+    lbl_ci_hint = lv_label_create(ci_container);
+    lv_label_set_text(lbl_ci_hint, "Enable CI/CD in the daemon settings");
+    lv_obj_set_style_text_font(lbl_ci_hint, &font_styrene_24, 0);
+    lv_obj_set_style_text_color(lbl_ci_hint, COL_DIM, 0);
+    lv_obj_align(lbl_ci_hint, LV_ALIGN_BOTTOM_MID, 0, -20);
+
+    lv_obj_add_flag(ci_container, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ======== Copilot Screen (480x480) ========
 //
 // One-panel layout: big status word (ACTIVE / IDLE / INACTIVE / OFF), relative
@@ -395,16 +522,24 @@ static void init_copilot_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
     lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
 
-    // Big Premium-requests panel — "Usage" pill on the right, "Premium
-    // requests" subtitle, huge percentage, "X / Y this month" counter.
+    // Big AI-credits panel — "Usage" pill on the right, "AI credits"
+    // subtitle, huge percentage, "X / Y this month" counter.
     lv_obj_t* p_premium = make_panel(copilot_container, MARGIN, CONTENT_Y,
                                      CONTENT_W, PANEL_H + 60);
 
     lv_obj_t* pill_usage = make_pill(p_premium, "Usage");
     lv_obj_align(pill_usage, LV_ALIGN_TOP_RIGHT, 0, 1);
 
+    lbl_cp_scope_pill = make_pill(p_premium, "Org");
+    lv_obj_set_style_text_font(lbl_cp_scope_pill, &font_styrene_20, 0);
+    lv_obj_set_style_pad_left(lbl_cp_scope_pill, 14, 0);
+    lv_obj_set_style_pad_right(lbl_cp_scope_pill, 14, 0);
+    lv_obj_set_style_pad_top(lbl_cp_scope_pill, 4, 0);
+    lv_obj_set_style_pad_bottom(lbl_cp_scope_pill, 4, 0);
+    lv_obj_align(lbl_cp_scope_pill, LV_ALIGN_TOP_RIGHT, 0, 48);
+
     lv_obj_t* sub_premium = lv_label_create(p_premium);
-    lv_label_set_text(sub_premium, "Premium requests");
+    lv_label_set_text(sub_premium, "AI credits");
     lv_obj_set_style_text_font(sub_premium, &font_styrene_24, 0);
     lv_obj_set_style_text_color(sub_premium, COL_DIM, 0);
     lv_obj_set_pos(sub_premium, 0, 0);
@@ -526,6 +661,78 @@ static void init_bluetooth_screen(lv_obj_t* scr) {
 
 // ======== Public API ========
 
+// Build the top-right battery indicator on the always-on-top layer so it shows
+// over every screen (including the splash) without re-adding it per screen.
+// Hidden until ui_set_battery() reports a connected battery. Drawn from LVGL
+// primitives (shell outline + bar fill + nub) so it needs no icon assets.
+static void init_battery_indicator(void) {
+    lv_obj_t* top = lv_layer_top();
+
+    batt_box = lv_obj_create(top);
+    lv_obj_remove_style_all(batt_box);
+    lv_obj_set_size(batt_box, 92, 26);
+    lv_obj_align(batt_box, LV_ALIGN_TOP_RIGHT, -12, 12);
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_CLICKABLE);   // let taps pass to the screen below
+    lv_obj_add_flag(batt_box, LV_OBJ_FLAG_HIDDEN);        // shown only when a battery is present
+
+    batt_label = lv_label_create(batt_box);
+    lv_label_set_text(batt_label, "");
+    lv_obj_set_style_text_font(batt_label, &font_styrene_20, 0);
+    lv_obj_set_style_text_color(batt_label, COL_TEXT, 0);
+    lv_obj_align(batt_label, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_clear_flag(batt_label, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_shell = lv_obj_create(batt_box);
+    lv_obj_remove_style_all(batt_shell);
+    lv_obj_set_size(batt_shell, 34, 18);
+    lv_obj_align(batt_shell, LV_ALIGN_RIGHT_MID, -4, 0);  // leave room for the nub
+    lv_obj_set_style_radius(batt_shell, 4, 0);
+    lv_obj_set_style_border_width(batt_shell, 2, 0);
+    lv_obj_set_style_border_color(batt_shell, COL_TEXT, 0);
+    lv_obj_set_style_pad_all(batt_shell, 2, 0);
+    lv_obj_clear_flag(batt_shell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(batt_shell, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_bar = lv_bar_create(batt_shell);
+    lv_obj_set_size(batt_bar, lv_pct(100), lv_pct(100));
+    lv_obj_center(batt_bar);
+    lv_bar_set_range(batt_bar, 0, 100);
+    lv_bar_set_value(batt_bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_opa(batt_bar, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_radius(batt_bar, 2, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(batt_bar, COL_GREEN, LV_PART_INDICATOR);
+    lv_obj_clear_flag(batt_bar, LV_OBJ_FLAG_CLICKABLE);
+
+    batt_nub = lv_obj_create(batt_box);
+    lv_obj_remove_style_all(batt_nub);
+    lv_obj_set_size(batt_nub, 3, 8);
+    lv_obj_align(batt_nub, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_radius(batt_nub, 1, 0);
+    lv_obj_set_style_bg_color(batt_nub, COL_TEXT, 0);
+    lv_obj_set_style_bg_opa(batt_nub, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(batt_nub, LV_OBJ_FLAG_CLICKABLE);
+}
+
+void ui_set_battery(int pct, bool charging) {
+    if (!batt_box) return;
+    if (pct < 0) {                                   // no battery — hide entirely
+        lv_obj_add_flag(batt_box, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(batt_box, LV_OBJ_FLAG_HIDDEN);
+    lv_bar_set_value(batt_bar, pct, LV_ANIM_OFF);
+
+    lv_color_t col;
+    if      (charging)  col = COL_GREEN;
+    else if (pct <= 20) col = COL_RED;
+    else if (pct <= 50) col = COL_AMBER;
+    else                col = COL_GREEN;
+    lv_obj_set_style_bg_color(batt_bar, col, LV_PART_INDICATOR);
+    lv_obj_set_style_text_color(batt_label, charging ? COL_GREEN : COL_TEXT, 0);
+    lv_label_set_text_fmt(batt_label, "%d%%", pct);
+}
+
 void ui_init(void) {
     lv_obj_t* scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, COL_BG, 0);
@@ -534,6 +741,7 @@ void ui_init(void) {
     init_usage_screen(scr);
     init_today_screen(scr);
     init_github_screen(scr);
+    init_ci_screen(scr);
     init_copilot_screen(scr);
     init_bluetooth_screen(scr);
     splash_init(scr);
@@ -555,6 +763,9 @@ void ui_init(void) {
     lv_obj_clear_flag(dim_overlay, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(dim_overlay, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(dim_overlay, LV_OBJ_FLAG_IGNORE_LAYOUT);
+
+    // Battery indicator lives on the top layer, above every screen + the dimmer.
+    init_battery_indicator();
 }
 
 void ui_update(const UsageData* data) {
@@ -578,8 +789,15 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_gh_issues,       "No data");
         lv_label_set_text(lbl_gh_prs,          "No data");
         lv_label_set_text(lbl_gh_status,       "Waiting for daemon");
+        lv_label_set_text(lbl_ci_status,       "No data");
+        lv_label_set_text(lbl_ci_repo,         "");
+        lv_label_set_text(lbl_ci_failing,      "0");
+        lv_label_set_text(lbl_ci_waiting,      "");
+        lv_label_set_text(lbl_ci_hint,         "Waiting for daemon");
         lv_label_set_text(lbl_cp_premium_pct,    "—");
         lv_label_set_text(lbl_cp_premium_counts, "");
+        lv_label_set_text(lbl_cp_scope_pill,     "");
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_TRANSP, 0);
         lv_label_set_text(lbl_cp_top_model,      "");
         lv_label_set_text(lbl_cp_strip,          "");
         lv_label_set_text(lbl_cp_hint,           "Waiting for daemon");
@@ -639,6 +857,9 @@ void ui_update(const UsageData* data) {
                           (int)data->sonnet_pct,
                           (int)data->haiku_pct);
 
+    // Show/hide the cost + cache panels per the daemon's toggles.
+    today_apply_layout(data->today_show_cost, data->today_show_cache);
+
     char footer[64];
     const char* proj = (data->project[0] != '\0') ? data->project : "(no project)";
     if (data->sessions_today == 1) {
@@ -664,8 +885,52 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_gh_status, "Set a token in the daemon settings");
     }
 
+    // ---- CI/CD screen ----
+    if (data->ci_enabled) {
+        const char* code = data->ci_status;
+        const char* word;
+        lv_color_t col;
+        if      (strcmp(code, "ok")   == 0) { word = "Passing"; col = COL_GREEN; }
+        else if (strcmp(code, "fail") == 0) { word = "Failing"; col = COL_RED;   }
+        else if (strcmp(code, "run")  == 0) { word = "Running"; col = COL_AMBER; }
+        else if (strcmp(code, "wait") == 0) { word = "Action";  col = COL_AMBER; }
+        else                                { word = "—";       col = COL_DIM;   }
+        lv_label_set_text(lbl_ci_status, word);
+        lv_obj_set_style_text_color(lbl_ci_status, col, 0);
+
+        char repo_buf[64];
+        if (data->ci_repo[0] && data->ci_branch[0]) {
+            snprintf(repo_buf, sizeof(repo_buf), "%s  -  %s", data->ci_repo, data->ci_branch);
+        } else {
+            snprintf(repo_buf, sizeof(repo_buf), "%s", data->ci_repo);
+        }
+        lv_label_set_text(lbl_ci_repo, repo_buf);
+
+        lv_label_set_text_fmt(lbl_ci_failing, "%u", (unsigned)data->ci_failing);
+        lv_obj_set_style_text_color(lbl_ci_failing,
+                                    data->ci_failing > 0 ? COL_RED : COL_TEXT, 0);
+
+        if (data->ci_waiting > 0) {
+            lv_label_set_text_fmt(lbl_ci_waiting, "%u waiting approval",
+                                  (unsigned)data->ci_waiting);
+        } else {
+            lv_label_set_text(lbl_ci_waiting, "");
+        }
+
+        lv_label_set_text(lbl_ci_hint,
+                          data->ci_workflow[0] ? data->ci_workflow : "Refreshed just now");
+    } else {
+        lv_label_set_text(lbl_ci_status, "No data");
+        lv_obj_set_style_text_color(lbl_ci_status, COL_DIM, 0);
+        lv_label_set_text(lbl_ci_repo, "");
+        lv_label_set_text(lbl_ci_failing, "0");
+        lv_obj_set_style_text_color(lbl_ci_failing, COL_TEXT, 0);
+        lv_label_set_text(lbl_ci_waiting, "");
+        lv_label_set_text(lbl_ci_hint, "Enable CI/CD in the daemon settings");
+    }
+
     // ---- Copilot screen ----
-    // Big panel: "Premium requests" with a huge percentage and an
+    // Big panel: "AI credits" with a huge percentage and an
     // "X / Y this month" counter. Top-model row underneath. Bottom strip
     // (one line) packs the status / editor / last-seen info that used to
     // get its own panel.
@@ -680,11 +945,20 @@ void ui_update(const UsageData* data) {
                  (unsigned)data->copilot_premium_allowance);
         lv_label_set_text(lbl_cp_premium_counts, cnt_buf);
 
+        const char* scope = "Org";
+        if (strcmp(data->copilot_premium_scope, "enterprise") == 0) {
+            scope = "Enterprise";
+        }
+        lv_label_set_text(lbl_cp_scope_pill, scope);
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_COVER, 0);
+
         lv_label_set_text(lbl_cp_top_model,
                           data->copilot_top_model[0] ? data->copilot_top_model : "");
     } else {
         lv_label_set_text(lbl_cp_premium_pct,    "—");
         lv_label_set_text(lbl_cp_premium_counts, "");
+        lv_label_set_text(lbl_cp_scope_pill,     "");
+        lv_obj_set_style_bg_opa(lbl_cp_scope_pill, LV_OPA_TRANSP, 0);
         lv_label_set_text(lbl_cp_top_model,      "");
     }
 
@@ -702,11 +976,11 @@ void ui_update(const UsageData* data) {
         }
         if (data->copilot_editor[0]) {
             off += snprintf(strip + off, sizeof(strip) - off, "%s%s",
-                            off ? "  ·  " : "", data->copilot_editor);
+                            off ? "  |  " : "", data->copilot_editor);
         }
         if (data->copilot_when[0]) {
             off += snprintf(strip + off, sizeof(strip) - off, "%s%s",
-                            off ? "  ·  " : "", data->copilot_when);
+                            off ? "  |  " : "", data->copilot_when);
         }
         lv_label_set_text(lbl_cp_strip, strip);
         lv_label_set_text(lbl_cp_hint,  "");
@@ -761,6 +1035,7 @@ static bool screen_enabled[SCREEN_COUNT] = {
     true,   // USAGE
     true,   // TODAY
     true,   // GITHUB
+    true,   // CI
     true,   // COPILOT
     true,   // BLUETOOTH
 };
@@ -777,6 +1052,7 @@ static screen_t name_to_screen(const char* tok, size_t len) {
     if (eq("usage"))   return SCREEN_USAGE;
     if (eq("today"))   return SCREEN_TODAY;
     if (eq("github"))  return SCREEN_GITHUB;
+    if (eq("ci"))      return SCREEN_CI;
     if (eq("copilot")) return SCREEN_COPILOT;
     return SCREEN_COUNT;
 }
@@ -833,6 +1109,7 @@ void ui_show_screen(screen_t screen) {
     lv_obj_add_flag(usage_container,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(today_container,   LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(github_container,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(ci_container,      LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(copilot_container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ble_container,     LV_OBJ_FLAG_HIDDEN);
     splash_hide();
@@ -842,6 +1119,7 @@ void ui_show_screen(screen_t screen) {
     case SCREEN_USAGE:      lv_obj_clear_flag(usage_container,   LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_TODAY:      lv_obj_clear_flag(today_container,   LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_GITHUB:     lv_obj_clear_flag(github_container,  LV_OBJ_FLAG_HIDDEN); break;
+    case SCREEN_CI:         lv_obj_clear_flag(ci_container,      LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_COPILOT:    lv_obj_clear_flag(copilot_container, LV_OBJ_FLAG_HIDDEN); break;
     case SCREEN_BLUETOOTH:  lv_obj_clear_flag(ble_container,     LV_OBJ_FLAG_HIDDEN); break;
     default: break;
@@ -854,7 +1132,7 @@ void ui_show_screen(screen_t screen) {
     current_screen = screen;
 }
 
-// Cycle order: SPLASH → USAGE → TODAY → GITHUB → COPILOT → BLUETOOTH → SPLASH.
+// Cycle order: SPLASH → USAGE → TODAY → GITHUB → CI → COPILOT → BLUETOOTH → SPLASH.
 // Skip any "app" screen whose enabled bit is clear so the user only sees
 // the apps they've checked in the tray window.
 static screen_t cycle_next_after(screen_t s) {
@@ -862,7 +1140,8 @@ static screen_t cycle_next_after(screen_t s) {
         case SCREEN_SPLASH:    return SCREEN_USAGE;
         case SCREEN_USAGE:     return SCREEN_TODAY;
         case SCREEN_TODAY:     return SCREEN_GITHUB;
-        case SCREEN_GITHUB:    return SCREEN_COPILOT;
+        case SCREEN_GITHUB:    return SCREEN_CI;
+        case SCREEN_CI:        return SCREEN_COPILOT;
         case SCREEN_COPILOT:   return SCREEN_BLUETOOTH;
         case SCREEN_BLUETOOTH: return SCREEN_SPLASH;
         default:               return SCREEN_USAGE;
@@ -895,6 +1174,7 @@ bool ui_focus_by_name(const char* name) {
     else if (strcmp(name, "usage")     == 0) target = SCREEN_USAGE;
     else if (strcmp(name, "today")     == 0) target = SCREEN_TODAY;
     else if (strcmp(name, "github")    == 0) target = SCREEN_GITHUB;
+    else if (strcmp(name, "ci")        == 0) target = SCREEN_CI;
     else if (strcmp(name, "copilot")   == 0) target = SCREEN_COPILOT;
     else if (strcmp(name, "bluetooth") == 0) target = SCREEN_BLUETOOTH;
     else return false;

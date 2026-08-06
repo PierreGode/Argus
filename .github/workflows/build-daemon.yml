@@ -3,13 +3,15 @@ name: Build Daemon EXE
 on:
   push:
     paths:
-      - "daemon/argus-daemon.py"
-      - "daemon/requirements.txt"
+      - "daemon/**"
+      - "assets/argus.ico"
+      - "tools/make_ico.py"
       - ".github/workflows/build-daemon.yml"
   pull_request:
     paths:
-      - "daemon/argus-daemon.py"
-      - "daemon/requirements.txt"
+      - "daemon/**"
+      - "assets/argus.ico"
+      - "tools/make_ico.py"
       - ".github/workflows/build-daemon.yml"
   workflow_dispatch:
 
@@ -29,14 +31,20 @@ jobs:
         run: pip install -r daemon/requirements.txt
 
       - name: Build EXE with PyInstaller
-        run: |
-          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+        shell: bash
+        run: pyinstaller daemon/argus-daemon.spec --noconfirm
+
+      - name: Build MSI (WiX)
+        shell: pwsh
+        run: ./daemon/packaging/windows/build-msi.ps1 -SkipExe -BuildNumber $env:GITHUB_RUN_NUMBER
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: argus-daemon-windows
-          path: dist/argus-daemon.exe
+          path: |
+            dist/argus-daemon.exe
+            dist/Argus-Setup.msi
 
   build-macos:
     runs-on: macos-latest
@@ -53,8 +61,7 @@ jobs:
         run: pip install -r daemon/requirements.txt
 
       - name: Build binary with PyInstaller
-        run: |
-          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+        run: pyinstaller daemon/argus-daemon.spec --noconfirm
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -77,8 +84,7 @@ jobs:
         run: pip install -r daemon/requirements.txt
 
       - name: Build binary with PyInstaller
-        run: |
-          pyinstaller --onefile --name argus-daemon --console daemon/argus-daemon.py
+        run: pyinstaller daemon/argus-daemon.spec --noconfirm
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
