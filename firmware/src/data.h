@@ -17,6 +17,7 @@ struct UsageData {
     uint8_t opus_pct;        // share of today's tokens that ran on Opus (0-100)
     uint8_t sonnet_pct;      // ... on Sonnet
     uint8_t haiku_pct;       // ... on Haiku
+    uint8_t fable_pct;       // ... on Fable (also covers Mythos — same pricing/UI bucket)
     uint8_t cache_hit_pct;   // cache_read / (cache_read + cache_creation + input) for today
     uint32_t tokens_today;   // total tokens consumed today (input + output + cache_*)
     uint16_t sessions_today; // number of distinct conversation files touched today

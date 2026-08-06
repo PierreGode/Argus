@@ -75,7 +75,7 @@ static lv_obj_t* p_cache_panel;      // cache-hit panel; also hosts the model-sp
 static lv_obj_t* pill_today_cache;   // "Cache" pill (hidden with the cache toggle)
 static lv_obj_t* lbl_today_cache_pct;
 static lv_obj_t* bar_today_cache;
-static lv_obj_t* lbl_today_models;   // Opus/Sonnet/Haiku split — kept visible even when cache is hidden
+static lv_obj_t* lbl_today_models;   // Opus/Sonnet/Haiku/Fable split — kept visible even when cache is hidden
 
 // ---- Bluetooth screen widgets ----
 static lv_obj_t* ble_container;
@@ -249,7 +249,8 @@ static void init_usage_screen(lv_obj_t* scr) {
 
     // Session footer — was on the Today screen as "<project> - N sessions".
     // The spinner + verb animation that used to live here is gone (the user
-    // didn't want it). Same style as the old Today footer.
+    // didn't want it). Same style as the old Today footer. Also carries the
+    // Fable token-share when there is one — see ui_update().
     lbl_usage_footer = lv_label_create(usage_container);
     lv_label_set_text(lbl_usage_footer, "");
     lv_obj_set_style_text_font(lbl_usage_footer, &font_styrene_24, 0);
@@ -852,20 +853,27 @@ void ui_update(const UsageData* data) {
     lv_obj_set_style_bg_color(bar_today_cache, cache_col, LV_PART_INDICATOR);
 
     lv_label_set_text_fmt(lbl_today_models,
-                          "Opus %d%%  Sonnet %d%%  Haiku %d%%",
+                          "Opus %d%%  Sonnet %d%%  Haiku %d%%  Fable %d%%",
                           (int)data->opus_pct,
                           (int)data->sonnet_pct,
-                          (int)data->haiku_pct);
+                          (int)data->haiku_pct,
+                          (int)data->fable_pct);
 
     // Show/hide the cost + cache panels per the daemon's toggles.
     today_apply_layout(data->today_show_cost, data->today_show_cache);
 
-    char footer[64];
+    // Base line is "<project> - N sessions"; append the Fable share only when
+    // there is one, so the common case (no Fable usage today) stays unchanged.
+    // Fable's per-model split can only be computed from local Claude Code
+    // session logs (unlike the two panels above, which come from Anthropic's
+    // account-wide rate-limit headers) — see docs/adr/0001-today-view-is-local-machine-only.md.
+    char footer[96];
     const char* proj = (data->project[0] != '\0') ? data->project : "(no project)";
-    if (data->sessions_today == 1) {
-        snprintf(footer, sizeof(footer), "%s  -  1 session", proj);
-    } else {
-        snprintf(footer, sizeof(footer), "%s  -  %u sessions", proj, (unsigned)data->sessions_today);
+    int n = (data->sessions_today == 1)
+        ? snprintf(footer, sizeof(footer), "%s  -  1 session", proj)
+        : snprintf(footer, sizeof(footer), "%s  -  %u sessions", proj, (unsigned)data->sessions_today);
+    if (data->fable_pct > 0 && n > 0 && (size_t)n < sizeof(footer)) {
+        snprintf(footer + n, sizeof(footer) - n, "  -  Fable %d%%", (int)data->fable_pct);
     }
     lv_label_set_text(lbl_usage_footer, footer);
 

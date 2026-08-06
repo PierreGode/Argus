@@ -884,7 +884,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             self.chk_today_cache.setChecked(bool(cfg.get("today_show_cache", True)))
             self.chk_today_cache.setToolTip(
                 "Show the cache-hit % and bar on the Today screen. The model "
-                "split (Opus / Sonnet / Haiku) stays visible either way."
+                "split (Opus / Sonnet / Haiku / Fable) stays visible either way."
             )
             ev.addWidget(self.chk_today_cache)
             hint = QLabel(

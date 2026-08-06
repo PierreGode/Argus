@@ -19,12 +19,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-# USD per 1M tokens. Cache write is the same as input on current Anthropic
-# pricing for 5m TTL; we use the documented numbers below. Easy to update
-# in one place if rates move.
+# USD per 1M tokens. Cache write is 1.25x input, cache read is 0.1x input
+# (Anthropic's standard 5m-TTL cache pricing) — easy to update in one place
+# if rates move.
 PRICING = {
-    # Claude 4.x family
-    "opus-4":   {"in": 15.00, "out": 75.00, "cache_write": 18.75, "cache_read": 1.50},
+    # Claude 5 family
+    "opus-5":   {"in":  5.00, "out": 25.00, "cache_write":  6.25, "cache_read": 0.50},
+    "sonnet-5": {"in":  3.00, "out": 15.00, "cache_write":  3.75, "cache_read": 0.30},
+    "fable-5":  {"in": 10.00, "out": 50.00, "cache_write": 12.50, "cache_read": 1.00},
+    "mythos-5": {"in": 10.00, "out": 50.00, "cache_write": 12.50, "cache_read": 1.00},
+    # Claude 4.x family. opus-4 reflects Opus 4.5+/4.6/4.7/4.8 pricing ($5/$25);
+    # the original Opus 4/4.1 were $15/$75, but both are deprecated/retired, so
+    # we don't carry a separate bucket for them.
+    "opus-4":   {"in":  5.00, "out": 25.00, "cache_write":  6.25, "cache_read": 0.50},
     "sonnet-4": {"in":  3.00, "out": 15.00, "cache_write":  3.75, "cache_read": 0.30},
     "haiku-4":  {"in":  1.00, "out":  5.00, "cache_write":  1.25, "cache_read": 0.10},
     # Older 3.x — kept so cost stays sane if your logs span a model transition.
@@ -34,17 +41,30 @@ PRICING = {
 }
 
 def classify_model(model: str) -> tuple[str, dict]:
-    """Return (family, pricing) for a model id. Family is one of opus/sonnet/haiku/other."""
+    """Return (family, pricing) for a model id.
+
+    Family is one of opus/sonnet/haiku/fable/other. "fable" also covers
+    Claude Mythos (same capabilities and pricing, Project Glasswing only) —
+    they're indistinguishable to the user, so we don't split them in the UI.
+    """
     if not model:
-        return "other", PRICING["sonnet-4"]
+        return "other", PRICING["sonnet-5"]
     m = model.lower()
     if "opus" in m:
+        if "-5" in m:
+            return "opus", PRICING["opus-5"]
         return "opus", PRICING["opus-4" if "-4" in m else "opus-3"]
     if "sonnet" in m:
+        if "-5" in m:
+            return "sonnet", PRICING["sonnet-5"]
         return "sonnet", PRICING["sonnet-4" if "-4" in m else "sonnet-3"]
     if "haiku" in m:
         return "haiku", PRICING["haiku-4" if "-4" in m else "haiku-3"]
-    return "other", PRICING["sonnet-4"]
+    if "fable" in m:
+        return "fable", PRICING["fable-5"]
+    if "mythos" in m:
+        return "fable", PRICING["mythos-5"]
+    return "other", PRICING["sonnet-5"]
 
 
 @dataclass
@@ -56,7 +76,7 @@ class Aggregates:
     cache_creation_today: int = 0
     input_today: int = 0
     by_model_today: dict[str, int] = field(default_factory=lambda: {
-        "opus": 0, "sonnet": 0, "haiku": 0, "other": 0,
+        "opus": 0, "sonnet": 0, "haiku": 0, "fable": 0, "other": 0,
     })
     sessions_today: set[str] = field(default_factory=set)
     latest_project: str = ""
@@ -200,8 +220,9 @@ def to_payload_fields(agg: Aggregates) -> dict:
         opus_pct   = round(100 * agg.by_model_today["opus"]   / counted)
         sonnet_pct = round(100 * agg.by_model_today["sonnet"] / counted)
         haiku_pct  = round(100 * agg.by_model_today["haiku"]  / counted)
+        fable_pct  = round(100 * agg.by_model_today["fable"]  / counted)
     else:
-        opus_pct = sonnet_pct = haiku_pct = 0
+        opus_pct = sonnet_pct = haiku_pct = fable_pct = 0
 
     cache_denom = agg.input_today + agg.cache_creation_today + agg.cache_read_today
     cache_pct = round(100 * agg.cache_read_today / cache_denom) if cache_denom else 0
@@ -212,6 +233,7 @@ def to_payload_fields(agg: Aggregates) -> dict:
         "mo": opus_pct,
         "ms": sonnet_pct,
         "mh": haiku_pct,
+        "mf": fable_pct,
         "ch": cache_pct,
         "tk": agg.tokens_today,
         "se": len(agg.sessions_today),

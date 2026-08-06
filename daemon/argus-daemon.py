@@ -374,16 +374,17 @@ def demo_payload() -> str:
     sr = random.randint(30, 280)
     wr = random.randint(500, 9000)
     # Fake Today numbers — split sums to ~100 so the screen looks realistic.
-    opus = random.randint(20, 60)
-    sonnet = random.randint(20, 100 - opus)
-    haiku = max(0, 100 - opus - sonnet)
+    opus = random.randint(10, 50)
+    sonnet = random.randint(10, 100 - opus)
+    fable = random.randint(0, max(0, 100 - opus - sonnet))
+    haiku = max(0, 100 - opus - sonnet - fable)
     fields = {
         "s": sp, "sr": sr,
         "w": wp, "wr": wr,
         "st": "active", "ok": True,
         "c":  round(random.uniform(0.5, 8.0), 2),
         "cw": round(random.uniform(5.0, 60.0), 2),
-        "mo": opus, "ms": sonnet, "mh": haiku,
+        "mo": opus, "ms": sonnet, "mh": haiku, "mf": fable,
         "ch": random.randint(40, 95),
         "tk": random.randint(50_000, 800_000),
         "se": random.randint(1, 12),

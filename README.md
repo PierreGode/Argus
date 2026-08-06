@@ -21,7 +21,7 @@ It runs on a [Waveshare ESP32-S3 Smart 86 Box Development Board]([https://www.wa
 What Argus shows:
 
 - **Usage** — Claude Code rate limits: the 5-hour session window and 7-day weekly window, with reset countdowns.
-- **Today** — today's API-equivalent token cost, the Opus / Sonnet / Haiku split, cache hit rate and session count, parsed from your local Claude Code logs.
+- **Today** — today's API-equivalent token cost, the Opus / Sonnet / Haiku / Fable split, cache hit rate and session count, parsed from your local Claude Code logs.
 - **GitHub** — open issues assigned to you and PRs awaiting your review, fetched with a PAT (`github_stats.py`).
 - **CI/CD** — GitHub Actions status across your recently-pushed repos: pass / fail / running / awaiting-approval, with auto-focus when a run fails or needs your sign-off (`ci_stats.py`).
 - **Copilot** — GitHub Copilot seat status (active / idle, editor, last activity) and monthly AI-credit usage for your org or enterprise (`copilot_stats.py`).
@@ -47,9 +47,9 @@ The device pairs the first time it sees the daemon; from then on it reconnects a
 
 The device boots into the splash and stays there until you press the BOOT button, which cycles `Splash → Usage → Today → GitHub → CI → Copilot → Bluetooth`. Screens you've unchecked in the tray app are skipped. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
 
-**Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours.
+**Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours. A footer line shows your most recently active project, session count, and — only on days you've used it — Fable's share of today's tokens (local-machine-only, same caveat as the Today screen below).
 
-**Today** shows the API-equivalent cost of today's tokens (labeled "API equiv." — on a Max subscription you don't pay this, but it shows how much the subscription is saving you), the 7-day rolling cost, the Opus / Sonnet / Haiku token split, cache hit rate, most recently active project, and sessions started today. All of it is parsed from `~/.claude/projects/**/*.jsonl` by the daemon, so it works even when the API is down.
+**Today** shows the API-equivalent cost of today's tokens (labeled "API equiv." — on a Max subscription you don't pay this, but it shows how much the subscription is saving you), the 7-day rolling cost, the Opus / Sonnet / Haiku / Fable token split, cache hit rate, most recently active project, and sessions started today. All of it is parsed from `~/.claude/projects/**/*.jsonl` by the daemon, so it works even when the API is down — but it also means these numbers only cover Claude Code sessions run *on the machine the daemon is running on*. If you also use Claude Code (or Fable) from another machine, its usage won't show up here — only the Usage screen's rate-limit bars above are account-wide.
 
 **GitHub** shows open issues assigned to you and open PRs awaiting your review (or assigned to you). Requires a GitHub PAT in the daemon's tray settings (Issues + Pull requests read scopes). Refreshes every 5 minutes. With no token configured the panels show `No data` and a hint.
 
@@ -176,7 +176,7 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 ```json
 {
   "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
-  "c": 3.47, "cw": 12.30, "mo": 45, "ms": 50, "mh": 5,
+  "c": 3.47, "cw": 12.30, "mo": 45, "ms": 40, "mh": 5, "mf": 10,
   "ch": 82, "tk": 234567, "se": 3, "pj": "argus",
   "ge": true, "gi": 4, "gp": 2,
   "cie": true, "cis": "fail", "cir": "argus", "cib": "main", "ciw": "build", "cif": 1, "ciq": 0,
@@ -195,7 +195,7 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 | `w` / `wr` | weekly % / minutes until it resets |
 | `st` / `ok` | rate-limit status / poll succeeded |
 | `c` / `cw` | USD spent today / in the last 7 days (API-equivalent) |
-| `mo` / `ms` / `mh` | Opus / Sonnet / Haiku token share, % |
+| `mo` / `ms` / `mh` / `mf` | Opus / Sonnet / Haiku / Fable token share, % (all four are local-machine-only — see note below) |
 | `ch` / `tk` / `se` | cache hit rate % / tokens today / distinct sessions today |
 | `pj` | most recently active project (basename) |
 | `ge` / `gi` / `gp` | GitHub enabled / open issues assigned / open PRs awaiting you |
