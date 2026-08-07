@@ -321,6 +321,11 @@ static void init_today_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_font(lbl_today_models, &font_styrene_24, 0);
     lv_obj_set_style_text_color(lbl_today_models, COL_DIM, 0);
     lv_obj_set_pos(lbl_today_models, 0, 94);
+    // Opus/Sonnet/Haiku/Fable together don't fit CONTENT_W on one line at this
+    // font size, so scroll it marquee-style rather than wrapping/truncating —
+    // LVGL only animates when the text actually overflows the fixed width.
+    lv_obj_set_width(lbl_today_models, CONTENT_W - 32);
+    lv_label_set_long_mode(lbl_today_models, LV_LABEL_LONG_SCROLL_CIRCULAR);
 
     // (Session-footer line moved to the Claude Usage screen — see
     // init_usage_screen's lbl_usage_footer.)
