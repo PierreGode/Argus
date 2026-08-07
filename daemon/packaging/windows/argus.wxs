@@ -5,10 +5,15 @@
   Build (see build-msi.ps1) with the WiX dotnet tool:
     wix build argus.wxs -arch x64 -ext WixToolset.UI.wixext ^
       -d Version=1.0.0.0 ^
-      -d ExePath=..\..\..\dist\argus-daemon.exe ^
+      -d SourceDir=..\..\..\dist\argus-daemon ^
       -d IcoPath=..\..\..\assets\argus.ico ^
       -d LicenseRtf=license.rtf ^
       -o Argus-Setup.msi
+
+  SourceDir is the PyInstaller onedir output folder (argus-daemon.exe +
+  _internal\...\); the <Files> wildcard below harvests it wholesale so the
+  exe keeps its runtime DLLs/data alongside it (onedir needs both present,
+  unlike the single self-contained exe onefile produced).
 
   Per-machine (Program Files) install: requires admin/UAC. Without a paid
   code-signing cert the elevation prompt shows "unknown publisher" — this is
@@ -51,12 +56,6 @@
     <!-- Installed files: Program Files\Argus\ -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Argus">
-        <Component Id="MainExe" Guid="*">
-          <File Id="ArgusDaemonExe"
-                Source="$(var.ExePath)"
-                Name="argus-daemon.exe"
-                KeyPath="yes" />
-        </Component>
         <Component Id="AppIcon" Guid="*">
           <File Id="ArgusIcoFile" Source="$(var.IcoPath)" Name="argus.ico" KeyPath="yes" />
         </Component>
@@ -87,7 +86,7 @@
     </StandardDirectory>
 
     <Feature Id="Main" Title="Argus" Level="1">
-      <ComponentRef Id="MainExe" />
+      <ComponentGroupRef Id="AppFiles" />
       <ComponentRef Id="AppIcon" />
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
@@ -96,4 +95,15 @@
     <ui:WixUI Id="WixUI_InstallDir" InstallDirectory="INSTALLFOLDER" />
     <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenseRtf)" />
   </Package>
+
+  <!-- The PyInstaller onedir output (argus-daemon.exe + _internal\...),
+       harvested wholesale so file additions/removals between builds don't
+       need hand-maintained <File> entries here. Preserves the source tree's
+       relative layout under INSTALLFOLDER, which is required — onedir's exe
+       only runs with _internal\ alongside it. -->
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Files Include="$(var.SourceDir)\**" />
+    </ComponentGroup>
+  </Fragment>
 </Wix>

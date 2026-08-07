@@ -5,7 +5,8 @@
 .DESCRIPTION
     One-shot local build:
       1. Ensure assets\argus.ico exists (regenerate from the mascot if Pillow is available).
-      2. Build dist\argus-daemon.exe from daemon\argus-daemon.spec (icon + version metadata).
+      2. Build dist\argus-daemon\ (onedir: argus-daemon.exe + _internal\) from
+         daemon\argus-daemon.spec (icon + version metadata).
       3. Ensure the WiX dotnet tool + UI extension are installed.
       4. Build dist\Argus-Setup.msi.
       5. (Optional) sign the exe + msi if a cert is configured — see -CertFile / $env:ARGUS_SIGN_CERT.
@@ -31,7 +32,7 @@ param(
     [string]$BuildNumber,
     # Python launcher to use for PyInstaller.
     [string]$Python = "python",
-    # Skip the PyInstaller step and reuse an existing dist\argus-daemon.exe.
+    # Skip the PyInstaller step and reuse an existing dist\argus-daemon\ build.
     [switch]$SkipExe,
     # Optional Authenticode .pfx to sign exe + msi (cert-ready; unset = unsigned).
     [string]$CertFile = $env:ARGUS_SIGN_CERT,
@@ -48,7 +49,11 @@ $Assets    = Join-Path $RepoRoot "assets"
 $Ico       = Join-Path $Assets "argus.ico"
 $Spec      = Join-Path $DaemonDir "argus-daemon.spec"
 $DistDir   = Join-Path $RepoRoot "dist"
-$Exe       = Join-Path $DistDir "argus-daemon.exe"
+# PyInstaller builds Windows as onedir (see argus-daemon.spec) — the exe and
+# its _internal\ runtime both land in this folder, which the MSI harvests
+# wholesale (see argus.wxs's <Files> wildcard).
+$SourceDir = Join-Path $DistDir "argus-daemon"
+$Exe       = Join-Path $SourceDir "argus-daemon.exe"
 $License   = Join-Path $ScriptDir "license.rtf"
 $Msi       = Join-Path $DistDir "Argus-Setup.msi"
 
@@ -85,7 +90,7 @@ if (-not $SkipExe) {
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed ($LASTEXITCODE)" }
     } finally { Pop-Location }
 }
-if (-not (Test-Path $Exe)) { throw "dist\argus-daemon.exe not found." }
+if (-not (Test-Path $Exe)) { throw "$Exe not found (expected PyInstaller onedir output)." }
 
 # --- 3+4. MSI (WiX v5 via the MSBuild SDK project) --------------------------
 # We use `dotnet build` on Argus.wixproj rather than the `wix` global tool:
@@ -106,7 +111,7 @@ dotnet restore $Proj
 if ($LASTEXITCODE -ne 0) { throw "dotnet restore (WiX) failed ($LASTEXITCODE)" }
 dotnet build $Proj -c Release --no-restore `
     "-p:ArgusVersion=$Version" `
-    "-p:ArgusExe=$Exe" `
+    "-p:ArgusSourceDir=$SourceDir" `
     "-p:ArgusIco=$Ico" `
     "-p:ArgusLicense=$License"
 if ($LASTEXITCODE -ne 0) { throw "dotnet build (WiX) failed ($LASTEXITCODE)" }

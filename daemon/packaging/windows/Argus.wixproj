@@ -2,7 +2,7 @@
   MSBuild SDK-style WiX project. Build with:
     dotnet build Argus.wixproj -c Release `
       -p:ArgusVersion=1.0.0 `
-      -p:ArgusExe=<abs path to argus-daemon.exe> `
+      -p:ArgusSourceDir=<abs path to dist\argus-daemon (onedir folder)> `
       -p:ArgusIco=<abs path to argus.ico> `
       -p:ArgusLicense=<abs path to license.rtf>
 
@@ -17,8 +17,10 @@
     <OutputName>Argus-Setup</OutputName>
     <OutputType>Package</OutputType>
     <InstallerPlatform>x64</InstallerPlatform>
-    <!-- argus.wxs consumes these as $(var.Name). -->
-    <DefineConstants>Version=$(ArgusVersion);ExePath=$(ArgusExe);IcoPath=$(ArgusIco);LicenseRtf=$(ArgusLicense)</DefineConstants>
+    <!-- argus.wxs consumes these as $(var.Name). ArgusSourceDir is the
+         PyInstaller onedir output folder (argus-daemon.exe + _internal\),
+         harvested wholesale via a <Files> wildcard in argus.wxs. -->
+    <DefineConstants>Version=$(ArgusVersion);SourceDir=$(ArgusSourceDir);IcoPath=$(ArgusIco);LicenseRtf=$(ArgusLicense)</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
