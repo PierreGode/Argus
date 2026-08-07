@@ -31,8 +31,14 @@
     <SummaryInformation Description="Argus desktop daemon — Claude Code usage monitor"
                         Manufacturer="PierreGode" />
 
-    <!-- Clean in-place upgrades: a newer version replaces the older one. -->
-    <MajorUpgrade DowngradeErrorMessage="A newer version of Argus is already installed. Setup will now exit." />
+    <!-- Clean in-place upgrades: a newer version replaces the older one.
+         AllowSameVersionUpgrades lets re-running the installer for the *same*
+         version also upgrade in place, instead of failing with MSI error 1638
+         ("Another version of this product is already installed") — the error
+         you'd otherwise hit rebuilding/reinstalling a version.py bump locally
+         without a fresh -BuildNumber. -->
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Argus is already installed. Setup will now exit."
+                  AllowSameVersionUpgrades="yes" />
     <MediaTemplate EmbedCab="yes" />
 
     <!-- Add/Remove Programs ("Apps & features") metadata. -->
