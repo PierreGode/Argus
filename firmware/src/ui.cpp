@@ -255,6 +255,11 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_label_set_text(lbl_usage_footer, "");
     lv_obj_set_style_text_font(lbl_usage_footer, &font_styrene_24, 0);
     lv_obj_set_style_text_color(lbl_usage_footer, COL_DIM, 0);
+    // Long project names + session count (+ optional Fable %) can overflow
+    // CONTENT_W at this font size, so scroll marquee-style rather than
+    // clipping — same fix as the Today screen's model-split line.
+    lv_obj_set_width(lbl_usage_footer, CONTENT_W - 32);
+    lv_label_set_long_mode(lbl_usage_footer, LV_LABEL_LONG_SCROLL_CIRCULAR);
     lv_obj_align(lbl_usage_footer, LV_ALIGN_BOTTOM_MID, 0, -20);
 }
 
