@@ -49,11 +49,14 @@ jobs:
           }
 
       - name: Upload artifact
+        # Windows is built as onedir (see argus-daemon.spec) — the exe needs
+        # its sibling dist/argus-daemon/_internal/ to run, so the whole
+        # folder ships, not just the .exe.
         uses: actions/upload-artifact@v4
         with:
           name: argus-daemon-windows
           path: |
-            dist/argus-daemon.exe
+            dist/argus-daemon/
             dist/Argus-Setup.msi
 
   build-macos:

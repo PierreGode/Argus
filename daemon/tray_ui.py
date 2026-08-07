@@ -33,10 +33,12 @@ import token_crypt  # local module: DPAPI wrapper for the GitHub PAT
 def resource_path(*rel: str) -> Path:
     """Resolve a bundled data file across run-from-source and PyInstaller.
 
-    Under PyInstaller --onefile, datas are unpacked to a temp dir exposed as
-    `sys._MEIPASS`; the spec bundles assets there under `assets/...`. When run
-    from source, assets live one level up from this file (../assets/...).
-    Returns the first candidate that exists, else the source-tree path.
+    Under PyInstaller, bundled datas land next to the running exe (a onefile
+    build's self-extracted temp dir, or a onedir build's install folder — see
+    argus-daemon.spec), exposed either way as `sys._MEIPASS`; the spec bundles
+    assets there under `assets/...`. When run from source, assets live one
+    level up from this file (../assets/...). Returns the first candidate that
+    exists, else the source-tree path.
     """
     here = Path(__file__).resolve().parent
     bases = []

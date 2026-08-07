@@ -220,8 +220,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 `.github/workflows/deploy-flasher.yml` runs on every push to `main`:
 
 1. **Build the firmware** with PlatformIO, merge bootloader + partitions + app into a single offset-0 image with `esptool merge_bin`.
-2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
-3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable exe, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
+2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). Windows builds **onedir** (exe + a sibling `_internal/` runtime folder — avoids onefile's self-extract-to-%TEMP% tax on every launch); macOS/Linux stay onefile. On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
+3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable zip, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
 
 The page uses [esp-web-tools](https://esphome.github.io/esp-web-tools/) for the Web Serial flash flow.
 
@@ -232,7 +232,7 @@ The whole EXE + MSI build is one script (run on Windows, PowerShell 7):
 ```powershell
 # from the repo root
 pwsh daemon/packaging/windows/build-msi.ps1
-# -> dist/argus-daemon.exe  and  dist/Argus-Setup.msi
+# -> dist/argus-daemon/argus-daemon.exe (+ _internal/)  and  dist/Argus-Setup.msi
 ```
 
 It generates `assets/argus.ico` from the mascot if missing (needs Pillow), builds the EXE from the spec, installs the WiX `dotnet tool` on first run, then emits the MSI. CI uses Python 3.12; if PySide6 lacks wheels for your local Python, pass `-Python "py -3.12"`. The build is **cert-ready**: set `$env:ARGUS_SIGN_CERT` (and `$env:ARGUS_SIGN_PASS`) to a `.pfx` to Authenticode-sign the exe + msi — but without a CA-trusted cert this does not remove the SmartScreen / "unknown publisher" warnings.

@@ -62,6 +62,12 @@ _cache_lock = threading.Lock()
 _cached_agg: Aggregates | None = None
 _cached_at: float = 0.0
 
+# On Windows, spawning a console program (ssh.exe) from a windowed/no-console
+# app (the PyInstaller-built tray daemon) briefly flashes a console window per
+# call unless we explicitly ask CreateProcess not to allocate one. No-op on
+# other platforms — CREATE_NO_WINDOW only exists in the Windows subprocess API.
+_NO_WINDOW_FLAGS = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+
 
 def _fetch_host(host: str, script_bytes: bytes, log: Callable[[str], None]) -> Aggregates | None:
     """Run claude_logs.py --raw on `host` over SSH. Returns None on any
@@ -75,6 +81,7 @@ def _fetch_host(host: str, script_bytes: bytes, log: Callable[[str], None]) -> A
             input=script_bytes,
             capture_output=True,
             timeout=HOST_TIMEOUT,
+            creationflags=_NO_WINDOW_FLAGS,
         )
     except subprocess.TimeoutExpired:
         log(f"remote Claude logs: {host} timed out after {HOST_TIMEOUT:.0f}s")
