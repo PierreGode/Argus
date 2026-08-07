@@ -259,9 +259,80 @@ def to_payload_fields(agg: Aggregates) -> dict:
     }
 
 
+def merge(a: Aggregates, b: Aggregates) -> Aggregates:
+    """Combine two Aggregates — used to fold a remote host's stats into the
+    local machine's before computing payload percentages. Percentages can't
+    be merged directly (50% + 50% isn't 100%), so callers must merge the raw
+    Aggregates first and call to_payload_fields() once on the result."""
+    out = Aggregates()
+    out.cost_today = a.cost_today + b.cost_today
+    out.cost_week = a.cost_week + b.cost_week
+    out.tokens_today = a.tokens_today + b.tokens_today
+    out.cache_read_today = a.cache_read_today + b.cache_read_today
+    out.cache_creation_today = a.cache_creation_today + b.cache_creation_today
+    out.input_today = a.input_today + b.input_today
+    out.by_model_today = {
+        k: a.by_model_today.get(k, 0) + b.by_model_today.get(k, 0)
+        for k in set(a.by_model_today) | set(b.by_model_today)
+    }
+    out.by_model_week = {
+        k: a.by_model_week.get(k, 0) + b.by_model_week.get(k, 0)
+        for k in set(a.by_model_week) | set(b.by_model_week)
+    }
+    out.sessions_today = a.sessions_today | b.sessions_today
+    if b.latest_project_ts > a.latest_project_ts:
+        out.latest_project, out.latest_project_ts = b.latest_project, b.latest_project_ts
+    else:
+        out.latest_project, out.latest_project_ts = a.latest_project, a.latest_project_ts
+    return out
+
+
+def aggregate_to_dict(agg: Aggregates) -> dict:
+    """Serialize an Aggregates for transport — e.g. printed as JSON on a
+    remote host and captured over SSH by remote_claude_logs.py. Sets become
+    sorted lists so the result is plain JSON."""
+    return {
+        "cost_today": agg.cost_today,
+        "cost_week": agg.cost_week,
+        "tokens_today": agg.tokens_today,
+        "cache_read_today": agg.cache_read_today,
+        "cache_creation_today": agg.cache_creation_today,
+        "input_today": agg.input_today,
+        "by_model_today": agg.by_model_today,
+        "by_model_week": agg.by_model_week,
+        "sessions_today": sorted(agg.sessions_today),
+        "latest_project": agg.latest_project,
+        "latest_project_ts": agg.latest_project_ts,
+    }
+
+
+def aggregate_from_dict(d: dict) -> Aggregates:
+    """Inverse of aggregate_to_dict()."""
+    agg = Aggregates()
+    agg.cost_today = float(d.get("cost_today", 0.0))
+    agg.cost_week = float(d.get("cost_week", 0.0))
+    agg.tokens_today = int(d.get("tokens_today", 0))
+    agg.cache_read_today = int(d.get("cache_read_today", 0))
+    agg.cache_creation_today = int(d.get("cache_creation_today", 0))
+    agg.input_today = int(d.get("input_today", 0))
+    agg.by_model_today.update(d.get("by_model_today") or {})
+    agg.by_model_week.update(d.get("by_model_week") or {})
+    agg.sessions_today = set(d.get("sessions_today") or [])
+    agg.latest_project = d.get("latest_project", "")
+    agg.latest_project_ts = float(d.get("latest_project_ts", 0.0))
+    return agg
+
+
 if __name__ == "__main__":
     # CLI: `python claude_logs.py` prints today's stats as JSON for debugging.
+    # `python claude_logs.py --raw` prints the raw Aggregates instead of the
+    # rolled-up payload fields — this is the form remote_claude_logs.py pipes
+    # this file into on a remote host over SSH (`ssh host python3 - --raw`),
+    # since raw counts merge correctly across hosts and percentages don't.
     import sys
-    fields = to_payload_fields(aggregate())
-    json.dump(fields, sys.stdout, indent=2)
+    if "--raw" in sys.argv[1:]:
+        payload = aggregate_to_dict(aggregate())
+    else:
+        payload = to_payload_fields(aggregate())
+    json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")
