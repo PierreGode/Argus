@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -41,7 +42,21 @@ HOST_TIMEOUT = 12.0
 # REFRESH_INTERVAL seconds, same idea as the rate-limit cache in the daemon.
 REFRESH_INTERVAL = 300.0
 
-_SCRIPT_PATH = Path(__file__).resolve().parent / "claude_logs.py"
+def _resolve_script_path() -> Path:
+    """Locate claude_logs.py on disk so its bytes can be piped over SSH.
+
+    Under PyInstaller, Python modules are compiled into the frozen bundle and
+    have no source file to read at `__file__` — claude_logs.py has to be
+    bundled separately as a data file (see argus-daemon.spec's `datas`) so it
+    lands, as a real file, in the onefile extraction dir (sys._MEIPASS).
+    Running from source, it's just the file next to this one."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass) / "claude_logs.py"
+    return Path(__file__).resolve().parent / "claude_logs.py"
+
+
+_SCRIPT_PATH = _resolve_script_path()
 
 _cache_lock = threading.Lock()
 _cached_agg: Aggregates | None = None

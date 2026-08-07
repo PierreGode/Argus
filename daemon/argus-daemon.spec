@@ -37,6 +37,12 @@ is_linux = sys.platform.startswith("linux")
 datas = [
     (ICON, "assets"),
     (os.path.join(ASSETS, "img", "happy.png"), os.path.join("assets", "img")),
+    # claude_logs.py is also bundled as a *data* file (in addition to being a
+    # compiled hiddenimport) so remote_claude_logs.py can read its raw source
+    # and pipe it over SSH to run on remote hosts — a frozen module has no
+    # source file at its __file__ to read. Landing it at the bundle root
+    # keeps it next to sys._MEIPASS, matching remote_claude_logs.py's lookup.
+    (os.path.join(DAEMON_DIR, "claude_logs.py"), "."),
 ]
 
 # ---- Windows version resource (Properties -> Details) ----------------------
