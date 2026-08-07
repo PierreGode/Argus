@@ -93,6 +93,8 @@ DEFAULTS = {
     "pending_name": "",        # transient rename target — promoted to device_name once the device confirms the push
     "today_show_cost": True,   # Today screen: show the "API equiv." cost panel
     "today_show_cache": True,  # Today screen: show the cache-hit panel (model split always shows)
+    "remote_claude_hosts": [], # SSH host aliases (from ~/.ssh/config) whose ~/.claude/projects
+                               # logs get folded into the Today screen's cost/tokens/model split
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
@@ -123,6 +125,7 @@ def _fresh_defaults() -> dict:
     `enabled_apps` list without scribbling on the module-level defaults."""
     base = dict(DEFAULTS)
     base["enabled_apps"] = list(DEFAULTS["enabled_apps"])
+    base["remote_claude_hosts"] = list(DEFAULTS["remote_claude_hosts"])
     return base
 
 
@@ -898,6 +901,31 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
             elems.setLayout(ev)
             v.addWidget(elems)
 
+            # Remote hosts whose Claude Code usage gets folded into the Today
+            # screen — otherwise it only ever sees this machine's sessions.
+            remote = QGroupBox("REMOTE CLAUDE CODE HOSTS")
+            rv = QVBoxLayout()
+            rv.setSpacing(8)
+            self.ed_remote_hosts = QLineEdit(
+                ", ".join(cfg.get("remote_claude_hosts") or [])
+            )
+            self.ed_remote_hosts.setPlaceholderText("e.g. devbox, gpu-server")
+            rv.addWidget(self.ed_remote_hosts)
+            remote_hint = QLabel(
+                "Comma-separated SSH host aliases from your ~/.ssh/config — the "
+                "same names you'd type as `ssh <name>`. The daemon runs "
+                "claude_logs.py over that connection every few minutes and "
+                "folds the result into the numbers above; it never sends or "
+                "stores a password, so key-based auth must already work "
+                "non-interactively for each host. Leave blank to only count "
+                "this machine."
+            )
+            remote_hint.setObjectName("muted")
+            remote_hint.setWordWrap(True)
+            rv.addWidget(remote_hint)
+            remote.setLayout(rv)
+            v.addWidget(remote)
+
             v.addStretch()
             return page
 
@@ -1094,6 +1122,9 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
                 "pending_name":       pending_name,
                 "today_show_cost":    self.chk_today_cost.isChecked(),
                 "today_show_cache":   self.chk_today_cache.isChecked(),
+                "remote_claude_hosts": [
+                    h.strip() for h in self.ed_remote_hosts.text().split(",") if h.strip()
+                ],
                 "ci_focus_fail":      self.chk_ci_focus_fail.isChecked(),
                 "ci_focus_action":    self.chk_ci_focus_action.isChecked(),
                 "ci_focus_success":   self.chk_ci_focus_success.isChecked(),

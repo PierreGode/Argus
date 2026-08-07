@@ -22,6 +22,8 @@ import httpx
 
 from claude_logs import aggregate as aggregate_today_stats
 from claude_logs import to_payload_fields as today_payload_fields
+from claude_logs import merge as merge_aggregates
+import remote_claude_logs
 import github_stats
 import copilot_stats
 import ci_stats
@@ -889,7 +891,11 @@ def build_payload(api_token: str) -> str:
     token = current_token(fallback=api_token)
     fields = poll_usage(token)
     try:
-        today = today_payload_fields(aggregate_today_stats())
+        agg = aggregate_today_stats()
+        remote_hosts = cfg.get("remote_claude_hosts") or []
+        if remote_hosts:
+            agg = merge_aggregates(agg, remote_claude_logs.get_cached(remote_hosts, log=log))
+        today = today_payload_fields(agg)
         fields.update(today)
     except Exception as e:
         # Local log parsing must never break the rate-limit display.
