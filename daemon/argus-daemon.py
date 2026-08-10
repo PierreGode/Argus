@@ -22,6 +22,8 @@ import httpx
 
 from claude_logs import aggregate as aggregate_today_stats
 from claude_logs import to_payload_fields as today_payload_fields
+from claude_logs import merge as merge_aggregates
+import remote_claude_logs
 import github_stats
 import copilot_stats
 import ci_stats
@@ -374,16 +376,22 @@ def demo_payload() -> str:
     sr = random.randint(30, 280)
     wr = random.randint(500, 9000)
     # Fake Today numbers — split sums to ~100 so the screen looks realistic.
-    opus = random.randint(20, 60)
-    sonnet = random.randint(20, 100 - opus)
-    haiku = max(0, 100 - opus - sonnet)
+    opus = random.randint(10, 50)
+    sonnet = random.randint(10, 100 - opus)
+    fable = random.randint(0, max(0, 100 - opus - sonnet))
+    haiku = max(0, 100 - opus - sonnet - fable)
+    opus_w = random.randint(10, 50)
+    sonnet_w = random.randint(10, 100 - opus_w)
+    fable_w = random.randint(0, max(0, 100 - opus_w - sonnet_w))
+    haiku_w = max(0, 100 - opus_w - sonnet_w - fable_w)
     fields = {
         "s": sp, "sr": sr,
         "w": wp, "wr": wr,
         "st": "active", "ok": True,
         "c":  round(random.uniform(0.5, 8.0), 2),
         "cw": round(random.uniform(5.0, 60.0), 2),
-        "mo": opus, "ms": sonnet, "mh": haiku,
+        "mo": opus, "ms": sonnet, "mh": haiku, "mf": fable,
+        "mow": opus_w, "msw": sonnet_w, "mhw": haiku_w, "mfw": fable_w,
         "ch": random.randint(40, 95),
         "tk": random.randint(50_000, 800_000),
         "se": random.randint(1, 12),
@@ -883,7 +891,11 @@ def build_payload(api_token: str) -> str:
     token = current_token(fallback=api_token)
     fields = poll_usage(token)
     try:
-        today = today_payload_fields(aggregate_today_stats())
+        agg = aggregate_today_stats()
+        remote_hosts = cfg.get("remote_claude_hosts") or []
+        if remote_hosts:
+            agg = merge_aggregates(agg, remote_claude_logs.get_cached(remote_hosts, log=log))
+        today = today_payload_fields(agg)
         fields.update(today)
     except Exception as e:
         # Local log parsing must never break the rate-limit display.

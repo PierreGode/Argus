@@ -21,7 +21,7 @@ It runs on a [Waveshare ESP32-S3 Smart 86 Box Development Board]([https://www.wa
 What Argus shows:
 
 - **Usage** — Claude Code rate limits: the 5-hour session window and 7-day weekly window, with reset countdowns.
-- **Today** — today's API-equivalent token cost, the Opus / Sonnet / Haiku split, cache hit rate and session count, parsed from your local Claude Code logs.
+- **Today** — today's API-equivalent token cost, the Opus / Sonnet / Haiku / Fable split, cache hit rate and session count, parsed from your local Claude Code logs.
 - **GitHub** — open issues assigned to you and PRs awaiting your review, fetched with a PAT (`github_stats.py`).
 - **CI/CD** — GitHub Actions status across your recently-pushed repos: pass / fail / running / awaiting-approval, with auto-focus when a run fails or needs your sign-off (`ci_stats.py`).
 - **Copilot** — GitHub Copilot seat status (active / idle, editor, last activity) and monthly AI-credit usage for your org or enterprise (`copilot_stats.py`).
@@ -47,9 +47,9 @@ The device pairs the first time it sees the daemon; from then on it reconnects a
 
 The device boots into the splash and stays there until you press the BOOT button, which cycles `Splash → Usage → Today → GitHub → CI → Copilot → Bluetooth`. Screens you've unchecked in the tray app are skipped. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
 
-**Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours.
+**Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours. A footer line shows your most recently active project, session count, and — only on days you've used it — Fable's share of today's tokens (local-machine-only, same caveat as the Today screen below).
 
-**Today** shows the API-equivalent cost of today's tokens (labeled "API equiv." — on a Max subscription you don't pay this, but it shows how much the subscription is saving you), the 7-day rolling cost, the Opus / Sonnet / Haiku token split, cache hit rate, most recently active project, and sessions started today. All of it is parsed from `~/.claude/projects/**/*.jsonl` by the daemon, so it works even when the API is down.
+**Today** shows the API-equivalent cost of today's tokens (labeled "API equiv." — on a Max subscription you don't pay this, but it shows how much the subscription is saving you), the 7-day rolling cost, the Opus / Sonnet / Haiku / Fable token split, cache hit rate, most recently active project, and sessions started today. All of it is parsed from `~/.claude/projects/**/*.jsonl` by the daemon, so it works even when the API is down — but it also means these numbers only cover Claude Code sessions run *on the machine the daemon is running on*, by default. If you also use Claude Code from other machines — e.g. Linux servers you SSH into — add them under **Claude → Remote Claude Code hosts** in the tray settings as a comma-separated list of `~/.ssh/config` host aliases; the daemon SSHes in every few minutes (key-based auth only, no password ever touches it) and folds their usage into the numbers above. The Windows/macOS Claude desktop app isn't covered — it's a different product with no local logs to read. Only the Usage screen's rate-limit bars above are account-wide by default (Anthropic pools that quota across every surface — chat, desktop app, and Claude Code).
 
 **GitHub** shows open issues assigned to you and open PRs awaiting your review (or assigned to you). Requires a GitHub PAT in the daemon's tray settings (Issues + Pull requests read scopes). Refreshes every 5 minutes. With no token configured the panels show `No data` and a hint.
 
@@ -176,7 +176,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 ```json
 {
   "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
-  "c": 3.47, "cw": 12.30, "mo": 45, "ms": 50, "mh": 5,
+  "c": 3.47, "cw": 12.30, "mo": 45, "ms": 40, "mh": 5, "mf": 10,
+  "mow": 38, "msw": 42, "mhw": 8, "mfw": 12,
   "ch": 82, "tk": 234567, "se": 3, "pj": "argus",
   "ge": true, "gi": 4, "gp": 2,
   "cie": true, "cis": "fail", "cir": "argus", "cib": "main", "ciw": "build", "cif": 1, "ciq": 0,
@@ -195,7 +196,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 | `w` / `wr` | weekly % / minutes until it resets |
 | `st` / `ok` | rate-limit status / poll succeeded |
 | `c` / `cw` | USD spent today / in the last 7 days (API-equivalent) |
-| `mo` / `ms` / `mh` | Opus / Sonnet / Haiku token share, % |
+| `mo` / `ms` / `mh` / `mf` | Opus / Sonnet / Haiku / Fable token share today, % (all four are local-machine-only — see note below) |
+| `mow` / `msw` / `mhw` / `mfw` | Opus / Sonnet / Haiku / Fable token share this week (rolling 7 days), % — same local-only computation as `mo`/`ms`/`mh`/`mf`, just windowed weekly; `mfw` is the "Fable weekly %" bar shown on the Today screen and in `claude /usage` |
 | `ch` / `tk` / `se` | cache hit rate % / tokens today / distinct sessions today |
 | `pj` | most recently active project (basename) |
 | `ge` / `gi` / `gp` | GitHub enabled / open issues assigned / open PRs awaiting you |
@@ -218,8 +220,8 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 `.github/workflows/deploy-flasher.yml` runs on every push to `main`:
 
 1. **Build the firmware** with PlatformIO, merge bootloader + partitions + app into a single offset-0 image with `esptool merge_bin`.
-2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
-3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable exe, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
+2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). Windows builds **onedir** (exe + a sibling `_internal/` runtime folder — avoids onefile's self-extract-to-%TEMP% tax on every launch); macOS/Linux stay onefile. On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
+3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable zip, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
 
 The page uses [esp-web-tools](https://esphome.github.io/esp-web-tools/) for the Web Serial flash flow.
 
@@ -230,7 +232,7 @@ The whole EXE + MSI build is one script (run on Windows, PowerShell 7):
 ```powershell
 # from the repo root
 pwsh daemon/packaging/windows/build-msi.ps1
-# -> dist/argus-daemon.exe  and  dist/Argus-Setup.msi
+# -> dist/argus-daemon/argus-daemon.exe (+ _internal/)  and  dist/Argus-Setup.msi
 ```
 
 It generates `assets/argus.ico` from the mascot if missing (needs Pillow), builds the EXE from the spec, installs the WiX `dotnet tool` on first run, then emits the MSI. CI uses Python 3.12; if PySide6 lacks wheels for your local Python, pass `-Python "py -3.12"`. The build is **cert-ready**: set `$env:ARGUS_SIGN_CERT` (and `$env:ARGUS_SIGN_PASS`) to a `.pfx` to Authenticode-sign the exe + msi — but without a CA-trusted cert this does not remove the SmartScreen / "unknown publisher" warnings.

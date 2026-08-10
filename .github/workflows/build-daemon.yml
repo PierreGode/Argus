@@ -14,6 +14,11 @@ on:
       - "tools/make_ico.py"
       - ".github/workflows/build-daemon.yml"
   workflow_dispatch:
+    inputs:
+      msi_version:
+        description: "Override the MSI ProductVersion (e.g. 1.0.6). Leave blank to use the default 1.0.<run number>."
+        required: false
+        type: string
 
 jobs:
   build-windows:
@@ -36,14 +41,22 @@ jobs:
 
       - name: Build MSI (WiX)
         shell: pwsh
-        run: ./daemon/packaging/windows/build-msi.ps1 -SkipExe -BuildNumber $env:GITHUB_RUN_NUMBER
+        run: |
+          if ("${{ inputs.msi_version }}") {
+            ./daemon/packaging/windows/build-msi.ps1 -SkipExe -Version "${{ inputs.msi_version }}"
+          } else {
+            ./daemon/packaging/windows/build-msi.ps1 -SkipExe -BuildNumber $env:GITHUB_RUN_NUMBER
+          }
 
       - name: Upload artifact
+        # Windows is built as onedir (see argus-daemon.spec) — the exe needs
+        # its sibling dist/argus-daemon/_internal/ to run, so the whole
+        # folder ships, not just the .exe.
         uses: actions/upload-artifact@v4
         with:
           name: argus-daemon-windows
           path: |
-            dist/argus-daemon.exe
+            dist/argus-daemon/
             dist/Argus-Setup.msi
 
   build-macos:

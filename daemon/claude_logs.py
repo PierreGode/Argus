@@ -19,12 +19,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
-# USD per 1M tokens. Cache write is the same as input on current Anthropic
-# pricing for 5m TTL; we use the documented numbers below. Easy to update
-# in one place if rates move.
+# USD per 1M tokens. Cache write is 1.25x input, cache read is 0.1x input
+# (Anthropic's standard 5m-TTL cache pricing) — easy to update in one place
+# if rates move.
 PRICING = {
-    # Claude 4.x family
-    "opus-4":   {"in": 15.00, "out": 75.00, "cache_write": 18.75, "cache_read": 1.50},
+    # Claude 5 family
+    "opus-5":   {"in":  5.00, "out": 25.00, "cache_write":  6.25, "cache_read": 0.50},
+    "sonnet-5": {"in":  3.00, "out": 15.00, "cache_write":  3.75, "cache_read": 0.30},
+    "fable-5":  {"in": 10.00, "out": 50.00, "cache_write": 12.50, "cache_read": 1.00},
+    "mythos-5": {"in": 10.00, "out": 50.00, "cache_write": 12.50, "cache_read": 1.00},
+    # Claude 4.x family. opus-4 reflects Opus 4.5+/4.6/4.7/4.8 pricing ($5/$25);
+    # the original Opus 4/4.1 were $15/$75, but both are deprecated/retired, so
+    # we don't carry a separate bucket for them.
+    "opus-4":   {"in":  5.00, "out": 25.00, "cache_write":  6.25, "cache_read": 0.50},
     "sonnet-4": {"in":  3.00, "out": 15.00, "cache_write":  3.75, "cache_read": 0.30},
     "haiku-4":  {"in":  1.00, "out":  5.00, "cache_write":  1.25, "cache_read": 0.10},
     # Older 3.x — kept so cost stays sane if your logs span a model transition.
@@ -34,17 +41,30 @@ PRICING = {
 }
 
 def classify_model(model: str) -> tuple[str, dict]:
-    """Return (family, pricing) for a model id. Family is one of opus/sonnet/haiku/other."""
+    """Return (family, pricing) for a model id.
+
+    Family is one of opus/sonnet/haiku/fable/other. "fable" also covers
+    Claude Mythos (same capabilities and pricing, Project Glasswing only) —
+    they're indistinguishable to the user, so we don't split them in the UI.
+    """
     if not model:
-        return "other", PRICING["sonnet-4"]
+        return "other", PRICING["sonnet-5"]
     m = model.lower()
     if "opus" in m:
+        if "-5" in m:
+            return "opus", PRICING["opus-5"]
         return "opus", PRICING["opus-4" if "-4" in m else "opus-3"]
     if "sonnet" in m:
+        if "-5" in m:
+            return "sonnet", PRICING["sonnet-5"]
         return "sonnet", PRICING["sonnet-4" if "-4" in m else "sonnet-3"]
     if "haiku" in m:
         return "haiku", PRICING["haiku-4" if "-4" in m else "haiku-3"]
-    return "other", PRICING["sonnet-4"]
+    if "fable" in m:
+        return "fable", PRICING["fable-5"]
+    if "mythos" in m:
+        return "fable", PRICING["mythos-5"]
+    return "other", PRICING["sonnet-5"]
 
 
 @dataclass
@@ -56,7 +76,10 @@ class Aggregates:
     cache_creation_today: int = 0
     input_today: int = 0
     by_model_today: dict[str, int] = field(default_factory=lambda: {
-        "opus": 0, "sonnet": 0, "haiku": 0, "other": 0,
+        "opus": 0, "sonnet": 0, "haiku": 0, "fable": 0, "other": 0,
+    })
+    by_model_week: dict[str, int] = field(default_factory=lambda: {
+        "opus": 0, "sonnet": 0, "haiku": 0, "fable": 0, "other": 0,
     })
     sessions_today: set[str] = field(default_factory=set)
     latest_project: str = ""
@@ -160,14 +183,16 @@ def aggregate(claude_dir: Path | None = None, now: float | None = None) -> Aggre
                 if not isinstance(cost, (int, float)):
                     cost = _line_cost(usage, pricing)
 
+                inp = usage.get("input_tokens", 0) or 0
+                out = usage.get("output_tokens", 0) or 0
+                cw  = usage.get("cache_creation_input_tokens", 0) or 0
+                cr  = usage.get("cache_read_input_tokens", 0) or 0
+                total = inp + out + cw + cr
+
                 agg.cost_week += cost
+                agg.by_model_week[family] += total
                 if ts >= today_start:
                     agg.cost_today += cost
-                    inp = usage.get("input_tokens", 0) or 0
-                    out = usage.get("output_tokens", 0) or 0
-                    cw  = usage.get("cache_creation_input_tokens", 0) or 0
-                    cr  = usage.get("cache_read_input_tokens", 0) or 0
-                    total = inp + out + cw + cr
                     agg.tokens_today += total
                     agg.input_today += inp
                     agg.cache_creation_today += cw
@@ -200,8 +225,18 @@ def to_payload_fields(agg: Aggregates) -> dict:
         opus_pct   = round(100 * agg.by_model_today["opus"]   / counted)
         sonnet_pct = round(100 * agg.by_model_today["sonnet"] / counted)
         haiku_pct  = round(100 * agg.by_model_today["haiku"]  / counted)
+        fable_pct  = round(100 * agg.by_model_today["fable"]  / counted)
     else:
-        opus_pct = sonnet_pct = haiku_pct = 0
+        opus_pct = sonnet_pct = haiku_pct = fable_pct = 0
+
+    counted_week = sum(agg.by_model_week.values())
+    if counted_week > 0:
+        opus_pct_week   = round(100 * agg.by_model_week["opus"]   / counted_week)
+        sonnet_pct_week = round(100 * agg.by_model_week["sonnet"] / counted_week)
+        haiku_pct_week  = round(100 * agg.by_model_week["haiku"]  / counted_week)
+        fable_pct_week  = round(100 * agg.by_model_week["fable"]  / counted_week)
+    else:
+        opus_pct_week = sonnet_pct_week = haiku_pct_week = fable_pct_week = 0
 
     cache_denom = agg.input_today + agg.cache_creation_today + agg.cache_read_today
     cache_pct = round(100 * agg.cache_read_today / cache_denom) if cache_denom else 0
@@ -212,6 +247,11 @@ def to_payload_fields(agg: Aggregates) -> dict:
         "mo": opus_pct,
         "ms": sonnet_pct,
         "mh": haiku_pct,
+        "mf": fable_pct,
+        "mow": opus_pct_week,
+        "msw": sonnet_pct_week,
+        "mhw": haiku_pct_week,
+        "mfw": fable_pct_week,
         "ch": cache_pct,
         "tk": agg.tokens_today,
         "se": len(agg.sessions_today),
@@ -219,9 +259,80 @@ def to_payload_fields(agg: Aggregates) -> dict:
     }
 
 
+def merge(a: Aggregates, b: Aggregates) -> Aggregates:
+    """Combine two Aggregates — used to fold a remote host's stats into the
+    local machine's before computing payload percentages. Percentages can't
+    be merged directly (50% + 50% isn't 100%), so callers must merge the raw
+    Aggregates first and call to_payload_fields() once on the result."""
+    out = Aggregates()
+    out.cost_today = a.cost_today + b.cost_today
+    out.cost_week = a.cost_week + b.cost_week
+    out.tokens_today = a.tokens_today + b.tokens_today
+    out.cache_read_today = a.cache_read_today + b.cache_read_today
+    out.cache_creation_today = a.cache_creation_today + b.cache_creation_today
+    out.input_today = a.input_today + b.input_today
+    out.by_model_today = {
+        k: a.by_model_today.get(k, 0) + b.by_model_today.get(k, 0)
+        for k in set(a.by_model_today) | set(b.by_model_today)
+    }
+    out.by_model_week = {
+        k: a.by_model_week.get(k, 0) + b.by_model_week.get(k, 0)
+        for k in set(a.by_model_week) | set(b.by_model_week)
+    }
+    out.sessions_today = a.sessions_today | b.sessions_today
+    if b.latest_project_ts > a.latest_project_ts:
+        out.latest_project, out.latest_project_ts = b.latest_project, b.latest_project_ts
+    else:
+        out.latest_project, out.latest_project_ts = a.latest_project, a.latest_project_ts
+    return out
+
+
+def aggregate_to_dict(agg: Aggregates) -> dict:
+    """Serialize an Aggregates for transport — e.g. printed as JSON on a
+    remote host and captured over SSH by remote_claude_logs.py. Sets become
+    sorted lists so the result is plain JSON."""
+    return {
+        "cost_today": agg.cost_today,
+        "cost_week": agg.cost_week,
+        "tokens_today": agg.tokens_today,
+        "cache_read_today": agg.cache_read_today,
+        "cache_creation_today": agg.cache_creation_today,
+        "input_today": agg.input_today,
+        "by_model_today": agg.by_model_today,
+        "by_model_week": agg.by_model_week,
+        "sessions_today": sorted(agg.sessions_today),
+        "latest_project": agg.latest_project,
+        "latest_project_ts": agg.latest_project_ts,
+    }
+
+
+def aggregate_from_dict(d: dict) -> Aggregates:
+    """Inverse of aggregate_to_dict()."""
+    agg = Aggregates()
+    agg.cost_today = float(d.get("cost_today", 0.0))
+    agg.cost_week = float(d.get("cost_week", 0.0))
+    agg.tokens_today = int(d.get("tokens_today", 0))
+    agg.cache_read_today = int(d.get("cache_read_today", 0))
+    agg.cache_creation_today = int(d.get("cache_creation_today", 0))
+    agg.input_today = int(d.get("input_today", 0))
+    agg.by_model_today.update(d.get("by_model_today") or {})
+    agg.by_model_week.update(d.get("by_model_week") or {})
+    agg.sessions_today = set(d.get("sessions_today") or [])
+    agg.latest_project = d.get("latest_project", "")
+    agg.latest_project_ts = float(d.get("latest_project_ts", 0.0))
+    return agg
+
+
 if __name__ == "__main__":
     # CLI: `python claude_logs.py` prints today's stats as JSON for debugging.
+    # `python claude_logs.py --raw` prints the raw Aggregates instead of the
+    # rolled-up payload fields — this is the form remote_claude_logs.py pipes
+    # this file into on a remote host over SSH (`ssh host python3 - --raw`),
+    # since raw counts merge correctly across hosts and percentages don't.
     import sys
-    fields = to_payload_fields(aggregate())
-    json.dump(fields, sys.stdout, indent=2)
+    if "--raw" in sys.argv[1:]:
+        payload = aggregate_to_dict(aggregate())
+    else:
+        payload = to_payload_fields(aggregate())
+    json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")

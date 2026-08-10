@@ -20,17 +20,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Cross-platform daemon build. Each runner produces a single-file PyInstaller
-  # binary uploaded as an artifact; the deploy job collects all three and
-  # stages them in site/daemon/.
+  # Cross-platform daemon build. Each runner produces a PyInstaller binary
+  # uploaded as an artifact; the deploy job collects all three and stages
+  # them in site/daemon/. Windows is onedir (exe + a sibling _internal\
+  # runtime folder — see argus-daemon.spec), so it ships zipped; macOS/Linux
+  # stay onefile, single binaries.
   build-daemon:
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: windows-latest
-            out_name: argus-daemon.exe
-            asset_name: argus-daemon-windows.exe
+            asset_name: argus-daemon-windows.zip
           - os: macos-latest
             out_name: argus-daemon
             asset_name: argus-daemon-macos
@@ -64,14 +65,22 @@ jobs:
         # number as the patch field -> a clean, monotonically increasing upgrade.
         run: ./daemon/packaging/windows/build-msi.ps1 -SkipExe -BuildNumber $env:GITHUB_RUN_NUMBER
 
-      - name: Stage per-platform assets
+      - name: Stage per-platform assets (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        # Onedir: zip the whole folder (exe + _internal\) as one download —
+        # the bare exe can't run without it.
+        run: |
+          New-Item -ItemType Directory -Force -Path staged | Out-Null
+          Compress-Archive -Path dist/argus-daemon/* -DestinationPath "staged/${{ matrix.asset_name }}"
+          Copy-Item dist/Argus-Setup.msi staged/Argus-Setup.msi
+
+      - name: Stage per-platform assets (macOS/Linux)
+        if: matrix.os != 'windows-latest'
         shell: bash
         run: |
           mkdir -p staged
           cp "dist/${{ matrix.out_name }}" "staged/${{ matrix.asset_name }}"
-          if [ "${{ matrix.os }}" = "windows-latest" ]; then
-            cp dist/Argus-Setup.msi staged/Argus-Setup.msi
-          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -140,7 +149,8 @@ jobs:
             0x10000  "$S3_DIR/firmware.bin"
 
           # Daemon binaries — merge-multiple flattened them into daemon-artifacts/.
-          cp daemon-artifacts/argus-daemon-windows.exe site/daemon/
+          # Windows ships as a zip (onedir: exe + _internal\ runtime folder).
+          cp daemon-artifacts/argus-daemon-windows.zip site/daemon/
           cp daemon-artifacts/Argus-Setup.msi          site/daemon/
           cp daemon-artifacts/argus-daemon-macos       site/daemon/
           cp daemon-artifacts/argus-daemon-linux       site/daemon/

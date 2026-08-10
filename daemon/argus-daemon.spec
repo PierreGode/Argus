@@ -1,12 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller spec for the Argus daemon.
 
-Produces a single-file binary for the host platform:
-  - Windows: windowed (no console), embedded mascot .ico, full VSVersionInfo
-             resource so Explorer/Properties -> Details shows ProductName,
-             Company, and version.
-  - macOS:   windowed.
-  - Linux:   console (keeps useful stdout logs; no GUI-bundling distinction).
+  - Windows: ONEDIR (dist/argus-daemon/argus-daemon.exe + _internal/), windowed
+             (no console), embedded mascot .ico, full VSVersionInfo resource so
+             Explorer/Properties -> Details shows ProductName, Company, and
+             version. Onedir avoids onefile's self-extract-to-%TEMP% step on
+             every launch (PySide6's DLLs made that a very noticeable ~1s tap
+             on cold start); the MSI installer already manages a folder of
+             files, and the web-flasher site's standalone download ships it
+             zipped, so nothing downstream needed a single .exe.
+  - macOS:   ONEFILE, windowed.
+  - Linux:   ONEFILE, console (keeps useful stdout logs; no GUI-bundling
+             distinction).
 
 Build (from the repo root or the daemon/ dir):
     pyinstaller daemon/argus-daemon.spec --noconfirm
@@ -37,6 +42,12 @@ is_linux = sys.platform.startswith("linux")
 datas = [
     (ICON, "assets"),
     (os.path.join(ASSETS, "img", "happy.png"), os.path.join("assets", "img")),
+    # claude_logs.py is also bundled as a *data* file (in addition to being a
+    # compiled hiddenimport) so remote_claude_logs.py can read its raw source
+    # and pipe it over SSH to run on remote hosts — a frozen module has no
+    # source file at its __file__ to read. Landing it at the bundle root
+    # keeps it next to sys._MEIPASS, matching remote_claude_logs.py's lookup.
+    (os.path.join(DAEMON_DIR, "claude_logs.py"), "."),
 ]
 
 # ---- Windows version resource (Properties -> Details) ----------------------
@@ -89,25 +100,58 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name="argus-daemon",
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=is_linux,            # console on Linux, windowed elsewhere
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=ICON if is_windows else None,
-    version=version_info,        # None on non-Windows
-)
+if is_windows:
+    # Onedir: the EXE carries only the bootstrap + Python runtime; COLLECT
+    # below lays a.binaries/a.datas alongside it in dist/argus-daemon/ instead
+    # of packing them into the exe for onefile's runtime self-extraction.
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name="argus-daemon",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=ICON,
+        version=version_info,
+    )
+    COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name="argus-daemon",
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name="argus-daemon",
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=is_linux,            # console on Linux, windowed on macOS
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=None,
+        version=None,
+    )
