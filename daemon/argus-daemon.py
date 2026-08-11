@@ -1044,8 +1044,17 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
             log(f"Auto-detected ESP32-S3 on {port}")
         try:
             log(f"Opening serial port {port} @ {baud}...")
-            # dsrdtr/rtscts off — avoid toggling DTR which can reset the ESP32-S3 USB CDC.
-            with serial.Serial(port, baud, timeout=1, dsrdtr=False, rtscts=False) as ser:
+            # dsrdtr/rtscts off is not enough: pyserial still asserts DTR when
+            # the constructor opens the port, and on the ESP32-S3's native
+            # USB-Serial-JTAG that edge fires USB_UART_CHIP_RESET — the board
+            # reboots the moment we connect. Construct closed, clear the
+            # control lines, then open. (Issue #19, cause 3.)
+            _ser = serial.Serial(None, baud, timeout=1, dsrdtr=False, rtscts=False)
+            _ser.port = port
+            _ser.dtr = False
+            _ser.rts = False
+            _ser.open()
+            with _ser as ser:
                 log(f"Serial open: {port}")
                 tray_ui.set_status("ok", f"USB — connected on {port}")
                 while True:
