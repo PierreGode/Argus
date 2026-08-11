@@ -290,6 +290,10 @@ static void handle_usb_usage_json(const char* line) {
 }
 
 void setup() {
+    // The host sends each JSON payload as one ~420 B line, but HWCDC's RX
+    // ring defaults to 256 B — the tail was silently dropped and no command
+    // ever dispatched. Must be called before begin(). (Issue #19, cause 4.)
+    Serial.setRxBufferSize(2048);
     Serial.begin(115200);
     delay(300);
     Serial.println("{\"ready\":true}");
