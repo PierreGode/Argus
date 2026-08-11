@@ -1013,6 +1013,15 @@ def find_serial_port() -> str | None:
     return None
 
 
+# The ESP32-S3 HWCDC RX ring defaults to 256 bytes and payloads have grown
+# past it (~420 B). 48-byte chunks with a short pause let loop() drain the
+# ring between writes. Firmware built after issue #19 also enlarges the ring,
+# but chunking keeps the daemon working with boards flashed before that —
+# mirroring what the BLE path has always done.
+SERIAL_CHUNK = 48
+SERIAL_INTER_CHUNK_DELAY = 0.02
+
+
 def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                stop_event: threading.Event | None = None,
                wake_event: threading.Event | None = None):
@@ -1061,8 +1070,24 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                     try:
                         payload = demo_payload() if demo_mode else build_payload(token)
                         log(f"Sending: {payload}")
-                        ser.write((payload + "\n").encode("utf-8"))
-                        ser.flush()
+                        # A single write of the whole line overflows the
+                        # firmware's 256 B HWCDC RX ring; the tail is silently
+                        # dropped, no "\n" arrives, and the command never
+                        # dispatches. Chunk it. (Issue #19, cause 4, fix B.)
+                        data = (payload + "\n").encode("utf-8")
+                        for i in range(0, len(data), SERIAL_CHUNK):
+                            ser.write(data[i:i + SERIAL_CHUNK])
+                            ser.flush()
+                            time.sleep(SERIAL_INTER_CHUNK_DELAY)
+                        # The firmware acks every payload (USB_USAGE_OK /
+                        # USB_USAGE_ERR). Log it — "Sending:" alone looks the
+                        # same whether the device parsed the line or never
+                        # received it, which made this bug invisible.
+                        time.sleep(0.05)
+                        if ser.in_waiting:
+                            reply = ser.read(ser.in_waiting).decode("utf-8", "replace").strip()
+                            if reply:
+                                log(f"Device: {reply}")
                         _commit_pending_rename()
                     except httpx.HTTPError as e:
                         log(f"API error: {e}")
