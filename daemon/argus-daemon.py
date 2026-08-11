@@ -1024,7 +1024,8 @@ SERIAL_INTER_CHUNK_DELAY = 0.02
 
 def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                stop_event: threading.Event | None = None,
-               wake_event: threading.Event | None = None):
+               wake_event: threading.Event | None = None,
+               reload_event: threading.Event | None = None):
     """USB CDC transport: write JSON payloads over serial, one line at a time.
 
     If `port_or_auto == "auto"`, the port is re-resolved on every reconnect
@@ -1038,7 +1039,10 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
     import serial  # pyserial — imported lazily so BLE-only users don't need it
 
     def _should_stop() -> bool:
-        return stop_event is not None and stop_event.is_set()
+        # reload_event means "the tray saved a different transport" — treat it
+        # like stop so run_worker can re-read the config and switch over.
+        return ((stop_event is not None and stop_event.is_set())
+                or (reload_event is not None and reload_event.is_set()))
 
     while not _should_stop():
         port = port_or_auto
@@ -1157,11 +1161,15 @@ async def _ble_write(client, payload: str) -> None:
 
 async def run_ble(demo_mode: bool, token,
                   stop_event: threading.Event | None = None,
-                  wake_event: threading.Event | None = None):
+                  wake_event: threading.Event | None = None,
+                  reload_event: threading.Event | None = None):
     from bleak import BleakClient
 
     def _should_stop() -> bool:
-        return stop_event is not None and stop_event.is_set()
+        # reload_event means "the tray saved a different transport" — treat it
+        # like stop so run_worker can re-read the config and switch over.
+        return ((stop_event is not None and stop_event.is_set())
+                or (reload_event is not None and reload_event.is_set()))
 
     loop = asyncio.get_running_loop()
 
@@ -1285,29 +1293,45 @@ def parse_args():
 
 
 def run_worker(args, token, stop_event: threading.Event,
-               wake_event: threading.Event | None = None):
+               wake_event: threading.Event | None = None,
+               reload_event: threading.Event | None = None):
     """Run the transport loop. Honors stop_event so the tray's Quit menu can
     terminate us cleanly, and wake_event so Save can push immediately. Picks
-    transport from CLI args first, then from the saved config."""
-    cfg = tray_ui.load_config()
-    transport = args.serial or (
-        "auto" if cfg.get("transport") == "usb" else None
-    )
+    transport from CLI args first, then from the saved config.
 
-    if transport:
-        log(f"Transport: USB serial ({transport})")
-        try:
-            run_serial(transport, args.serial_baud, args.demo, token,
-                       stop_event=stop_event, wake_event=wake_event)
-        except KeyboardInterrupt:
-            pass
-    else:
-        log("Transport: BLE")
-        try:
-            asyncio.run(run_ble(args.demo, token,
-                                stop_event=stop_event, wake_event=wake_event))
-        except KeyboardInterrupt:
-            pass
+    When reload_event fires (the tray saved a different transport), the
+    active loop winds down, the config is re-read, and the newly selected
+    transport starts — previously the setting was silently ignored until
+    the daemon was restarted. (Issue #19, cause 1.)"""
+    while True:
+        cfg = tray_ui.load_config()
+        transport = args.serial or (
+            "auto" if cfg.get("transport") == "usb" else None
+        )
+
+        if transport:
+            log(f"Transport: USB serial ({transport})")
+            try:
+                run_serial(transport, args.serial_baud, args.demo, token,
+                           stop_event=stop_event, wake_event=wake_event,
+                           reload_event=reload_event)
+            except KeyboardInterrupt:
+                return
+        else:
+            log("Transport: BLE")
+            try:
+                asyncio.run(run_ble(args.demo, token,
+                                    stop_event=stop_event, wake_event=wake_event,
+                                    reload_event=reload_event))
+            except KeyboardInterrupt:
+                return
+
+        if (reload_event is not None and reload_event.is_set()
+                and not stop_event.is_set()):
+            reload_event.clear()
+            log("Transport setting changed — switching now")
+            continue
+        return
 
 
 if __name__ == "__main__":
@@ -1324,6 +1348,7 @@ if __name__ == "__main__":
 
     stop_event = threading.Event()
     wake_event = threading.Event()
+    reload_event = threading.Event()
 
     if args.headless:
         # Old behavior: worker on main thread, Ctrl-C to quit.
@@ -1334,6 +1359,8 @@ if __name__ == "__main__":
     else:
         # GUI mode: worker thread, tray on main thread (Qt insists on
         # main-thread event loops).
+        last_transport = {"value": tray_ui.load_config().get("transport")}
+
         def _on_save(new_cfg):
             log(f"Settings saved: transport={new_cfg['transport']} "
                 f"brightness={new_cfg['brightness']} "
@@ -1342,13 +1369,25 @@ if __name__ == "__main__":
             # every source — Save means "show me current data now", not the
             # values cached from the last tick.
             force_refresh()
+            # A BLE<->USB switch can't be applied by the running loop; it used
+            # to be silently ignored until the daemon was restarted (issue #19,
+            # cause 1). Tell run_worker to wind down and re-read the config.
+            # The --serial CLI flag still overrides the setting, as documented.
+            if new_cfg.get("transport") != last_transport["value"]:
+                last_transport["value"] = new_cfg.get("transport")
+                if args.serial:
+                    log("Transport changed in settings, but the --serial CLI "
+                        "override is active — restart the daemon to apply it.")
+                else:
+                    reload_event.set()
             # Kick the worker out of its inter-poll sleep so the new settings +
             # freshly-pulled data ship to the device on the next tick instead of
             # waiting up to POLL_INTERVAL seconds.
             wake_event.set()
 
         worker = threading.Thread(
-            target=run_worker, args=(args, token, stop_event, wake_event),
+            target=run_worker, args=(args, token, stop_event, wake_event,
+                                     reload_event),
             name="argus-worker", daemon=True
         )
         worker.start()
