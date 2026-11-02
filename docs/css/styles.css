@@ -297,3 +297,10 @@ footer .row-spaced { margin-top: 1rem; }
   .panel { padding: 1.5rem 1.25rem; }
   .splash-stage { width: 180px; height: 180px; }
 }
+
+/* Divider between the two flashable devices in the Flash panel. */
+.flash-divider {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 22px 0 18px;
+}

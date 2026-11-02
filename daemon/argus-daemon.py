@@ -30,6 +30,12 @@ import ci_stats
 import tray_ui
 from version import __version__
 
+# Klar-lampan: per-session state + the pluggable output layer. Argus itself is
+# wrapped as one of these outputs (ArgusOutput) and runs unchanged.
+import usb_arbiter
+from session_state import SessionStore, start_hook_listener, DEFAULT_HOOK_PORT
+from outputs import ArgusOutput, KlarLampOutput, OutputManager, RunContext
+
 # ---- BLE UUIDs (must match firmware ble.cpp) ----
 SERVICE_UUID    = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID    = "4c41555a-4465-7669-6365-000000000002"
@@ -1003,12 +1009,18 @@ def find_serial_port() -> str | None:
     from serial.tools import list_ports
     for p in list_ports.comports():
         if p.vid == 0x303A and p.pid in (0x1001, 0x4001):
+            # A Klar-lampan is also an ESP32-S3; skip it so Argus-on-USB and the
+            # lamp never claim the same port (the lamp answers the ID? probe).
+            if usb_arbiter.is_klar(p.device):
+                continue
             return p.device
     # Fallback: match on description for boards using a CH343/CP210x bridge that
     # still advertise Espressif in their USB strings.
     for p in list_ports.comports():
         desc = ((p.description or "") + " " + (p.manufacturer or "")).lower()
         if "espressif" in desc or "usb jtag" in desc:
+            if usb_arbiter.is_klar(p.device):
+                continue
             return p.device
     return None
 
@@ -1350,11 +1362,30 @@ if __name__ == "__main__":
     wake_event = threading.Event()
     reload_event = threading.Event()
 
+    # Build the output layer. Argus is wrapped as ArgusOutput (it just calls the
+    # existing run_worker, unchanged); the Klar-lampan is a second, independent
+    # output. Either, both, or neither can be connected — the daemon runs on.
+    cfg0 = tray_ui.load_config()
+    store = SessionStore(log=log)
+    klar_enabled = bool(cfg0.get("klar_lamp_enabled", True))
+    if klar_enabled:
+        hook_port = int(cfg0.get("klar_hook_port", DEFAULT_HOOK_PORT) or DEFAULT_HOOK_PORT)
+        start_hook_listener(store, hook_port, log=log)
+
+    run_ctx = RunContext(args=args, token=token, stop_event=stop_event,
+                         wake_event=wake_event, reload_event=reload_event,
+                         store=store, log=log)
+    outputs = [ArgusOutput(run_worker)]
+    if klar_enabled:
+        outputs.append(KlarLampOutput())
+    manager = OutputManager(outputs, run_ctx)
+
     if args.headless:
-        # Old behavior: worker on main thread, Ctrl-C to quit.
+        # Worker (output threads) started by the manager; Ctrl-C to quit.
         try:
-            run_worker(args, token, stop_event, wake_event)
+            manager.run()
         except KeyboardInterrupt:
+            stop_event.set()
             log("Stopped")
     else:
         # GUI mode: worker thread, tray on main thread (Qt insists on
@@ -1386,9 +1417,7 @@ if __name__ == "__main__":
             wake_event.set()
 
         worker = threading.Thread(
-            target=run_worker, args=(args, token, stop_event, wake_event,
-                                     reload_event),
-            name="argus-worker", daemon=True
+            target=manager.run, name="argus-worker", daemon=True
         )
         worker.start()
 

@@ -1,0 +1,26 @@
+{
+  "//": "Klar-lampan hooks for Claude Code. Merge the `hooks` block into your",
+  "//1": "~/.claude/settings.json (or a project .claude/settings.json). First copy",
+  "//2": "daemon/klar_hook.py to ~/.claude/klar_hook.py (or point `command` at its",
+  "//3": "path). One script handles all five events — it reads hook_event_name from",
+  "//4": "stdin. It only talks to the daemon (127.0.0.1), never the device/COM port,",
+  "//5": "and exits 0 if the daemon isn't running, so hooks are never slowed.",
+  "//6": "On Windows, `python` may need to be the full interpreter path.",
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ],
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ]
+  }
+}

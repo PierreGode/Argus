@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "firmware/**"
+      - "firmware-klar/**"
       - "docs/**"
       - "daemon/**"
       - ".github/workflows/deploy-flasher.yml"
@@ -107,7 +108,7 @@ jobs:
           path: |
             ~/.platformio
             ~/.cache/pip
-          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini', 'firmware-klar/platformio.ini') }}
           restore-keys: pio-${{ runner.os }}-
 
       - name: Install PlatformIO + esptool
@@ -116,7 +117,9 @@ jobs:
           pip install platformio esptool
 
       - name: Build firmware (ESP32-S3)
-        run: pio run -d firmware
+        run: |
+          pio run -d firmware        # Argus device
+          pio run -d firmware-klar   # Klar-lampan (LilyGO T-Dongle S3)
 
       - name: Download daemon artifacts
         uses: actions/download-artifact@v4
@@ -148,6 +151,16 @@ jobs:
             0xe000   "$BOOT_APP0" \
             0x10000  "$S3_DIR/firmware.bin"
 
+          # Klar-lampan (LilyGO T-Dongle S3, 4MB flash) — same single-image merge.
+          KLAR_DIR=firmware-klar/.pio/build/t_dongle_s3
+          python -m esptool --chip esp32s3 merge_bin \
+            --output site/firmware/klar-esp32s3.bin \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            0x0000   "$KLAR_DIR/bootloader.bin" \
+            0x8000   "$KLAR_DIR/partitions.bin" \
+            0xe000   "$BOOT_APP0" \
+            0x10000  "$KLAR_DIR/firmware.bin"
+
           # Daemon binaries — merge-multiple flattened them into daemon-artifacts/.
           # Windows ships as a zip (onedir: exe + _internal\ runtime folder).
           cp daemon-artifacts/argus-daemon-windows.zip site/daemon/
@@ -161,6 +174,9 @@ jobs:
 
           jq --arg v "$VERSION" '.version = $v' site/manifest.json > site/manifest.json.tmp
           mv site/manifest.json.tmp site/manifest.json
+
+          jq --arg v "$VERSION" '.version = $v' site/manifest-klar.json > site/manifest-klar.json.tmp
+          mv site/manifest-klar.json.tmp site/manifest-klar.json
 
           echo "{\"build\":\"$VERSION\",\"sha\":\"${GITHUB_SHA::7}\",\"date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > site/version.json
 

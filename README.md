@@ -28,6 +28,10 @@ What Argus shows:
 - **Auto-focus** — the device jumps to the relevant screen when something changes (e.g. a new PR → GitHub). Manual navigation is preserved between events, so it never feels hostile.
 - A **PySide6 tray app** (`tray_ui.py`) with a live log, settings window, and system-tray integration. Edits apply on the next poll (immediately on Save). You choose which screens cycle, toggle power-save, rename the device, and more. Windows is the primary target; macOS / Linux run from source.
 
+### Companion: the Klar-lampan ("done lamp")
+
+The daemon drives **pluggable outputs** — Argus and the **Klar-lampan** are two independent outputs behind one interface, so you can run either, both, or neither and the daemon carries on. The lamp is a [LilyGO T-Dongle S3](https://www.lilygo.cc/products/t-dongle-s3) that shows the live state of each Claude Code **session** (working / waiting-for-me / done / resting), fed by Claude Code hooks rather than polling. Firmware: [`firmware-klar/`](firmware-klar/). Protocol + hook setup: [`PROTOCOL.md`](PROTOCOL.md).
+
 
 ## Quick start
 
@@ -219,11 +223,11 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 
 `.github/workflows/deploy-flasher.yml` runs on every push to `main`:
 
-1. **Build the firmware** with PlatformIO, merge bootloader + partitions + app into a single offset-0 image with `esptool merge_bin`.
+1. **Build both firmwares** with PlatformIO — the Argus device (`firmware/`) and the Klar-lampan (`firmware-klar/`) — merging each one's bootloader + partitions + app into a single offset-0 image with `esptool merge_bin` (`argus-esp32s3.bin` and `klar-esp32s3.bin`).
 2. **Build the daemon** in parallel on Windows, macOS, and Linux runners via PyInstaller, driven by [`daemon/argus-daemon.spec`](daemon/argus-daemon.spec) (embeds the mascot icon + Windows version metadata, bundles assets, windowed on Win/macOS, console on Linux). Windows builds **onedir** (exe + a sibling `_internal/` runtime folder — avoids onefile's self-extract-to-%TEMP% tax on every launch); macOS/Linux stay onefile. On Windows it then builds a per-machine **`Argus-Setup.msi`** with the [WiX Toolset](https://wixtoolset.org/) (installed as a `dotnet tool`).
-3. **Deploy to GitHub Pages** — the firmware bin, the Windows installer + portable zip, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
+3. **Deploy to GitHub Pages** — both firmware bins, the Windows installer + portable zip, the macOS / Linux binaries, the splash animations, and the flasher HTML all ship together.
 
-The page uses [esp-web-tools](https://esphome.github.io/esp-web-tools/) for the Web Serial flash flow.
+The page uses [esp-web-tools](https://esphome.github.io/esp-web-tools/) for the Web Serial flash flow, with a separate **Flash Klar-lampan** button (its own `manifest-klar.json`) next to **Flash Argus**.
 
 ### Building the Windows installer locally
 

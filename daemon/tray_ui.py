@@ -97,6 +97,8 @@ DEFAULTS = {
     "today_show_cache": True,  # Today screen: show the cache-hit panel (model split always shows)
     "remote_claude_hosts": [], # SSH host aliases (from ~/.ssh/config) whose ~/.claude/projects
                                # logs get folded into the Today screen's cost/tokens/model split
+    "klar_lamp_enabled": True, # run the Klar-lampan output (LilyGO T-Dongle) + its hook listener
+    "klar_hook_port": 47600,   # loopback TCP port the Claude Code hooks send session events to
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles

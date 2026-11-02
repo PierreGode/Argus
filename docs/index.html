@@ -65,6 +65,30 @@
           to force download mode.
         </p>
 
+        <hr class="flash-divider" />
+
+        <div class="board-chip">
+          <span class="dot" aria-hidden="true"></span>
+          LilyGO T-Dongle S3 — Klar-lampan
+        </div>
+        <p class="hint">
+          The companion "done lamp": per-session Claude Code status (working /
+          waiting / done / resting), driven by Claude Code hooks. Flash it the
+          same way, then run the same daemon.
+        </p>
+
+        <div>
+          <esp-web-install-button manifest="manifest-klar.json">
+            <button class="flash" slot="activate">Flash Klar-lampan</button>
+            <button class="flash-disabled" slot="unsupported">
+              Use Chrome, Edge, or Opera — your browser lacks Web Serial
+            </button>
+            <button class="flash-disabled" slot="not-allowed">
+              Web Serial requires HTTPS
+            </button>
+          </esp-web-install-button>
+        </div>
+
         <div id="browserWarn" class="browser-warn">
           Web Serial is only supported by Chromium-based browsers (Chrome, Edge,
           Opera) on desktop.
