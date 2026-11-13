@@ -22,6 +22,7 @@ Shared by the lamp output (``find_klar_port``) and the Argus USB discovery
 
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
@@ -53,16 +54,42 @@ def espressif_ports() -> list[str]:
     return out
 
 
+
+def open_no_reset(port: str, baud: int = 115200, timeout: float | None = 1):
+    """Open an ESP32-S3 native-USB serial port without rebooting the board.
+
+    The USB-Serial-JTAG resets the chip on an RTS-high / DTR-low combination,
+    and which open sequence produces that edge differs by OS:
+
+      - Windows: pyserial asserts DTR while opening, so the lines must be
+        cleared *before* open() (construct closed, set dtr/rts False, open).
+      - Linux: the kernel raises both lines on open; pre-clearing makes
+        pyserial then drop DTR before RTS, which is exactly the reset
+        combination — measured on a Pi: that sequence reboots the board on
+        every open, a plain open never does. So on Linux just open normally and
+        leave the lines alone.
+
+    Every serial open in the daemon goes through here (Argus transport, lamp
+    transport, the ID? probe) so none of them reboot a board another transport
+    — e.g. Argus over BLE while it sits on USB power — is talking to.
+    """
+    import serial
+    if sys.platform.startswith("linux"):
+        return serial.Serial(port, baud, timeout=timeout, dsrdtr=False, rtscts=False)
+    ser = serial.Serial(None, baud, timeout=timeout, dsrdtr=False, rtscts=False)
+    ser.port = port
+    ser.dtr = False
+    ser.rts = False
+    ser.open()
+    return ser
+
+
 def _probe(port: str, baud: int = 115200, timeout: float = 0.8) -> str:
     """Open `port` DTR/RTS-low, send ID?, and classify from the reply.
     Returns "klar" or "other". Never resets the board."""
     import serial
     try:
-        ser = serial.Serial(None, baud, timeout=timeout, dsrdtr=False, rtscts=False)
-        ser.port = port
-        ser.dtr = False
-        ser.rts = False
-        ser.open()
+        ser = open_no_reset(port, baud, timeout)
     except (serial.SerialException, OSError):
         return "other"
     try:

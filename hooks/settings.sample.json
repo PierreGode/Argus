@@ -6,12 +6,20 @@
   "//4": "stdin. It only talks to the daemon (127.0.0.1), never the device/COM port,",
   "//5": "and exits 0 if the daemon isn't running, so hooks are never slowed.",
   "//6": "On Windows, `python` may need to be the full interpreter path.",
+  "//7": "PermissionRequest is optional and is for the Argus device, not the lamp:",
+  "//8": "it shows each permission prompt on Argus with Allow / Deny / Skip. That",
+  "//9": "hook waits for your tap (up to the daemon's prompt_timeout, default 30 s)",
+  "//10": "before Claude Code falls back to its terminal prompt. Leave it out to keep",
+  "//11": "prompts terminal-only.",
   "hooks": {
     "UserPromptSubmit": [
       { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
     ],
     "PreToolUse": [
       { "matcher": "*", "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }
+    ],
+    "PermissionRequest": [
+      { "matcher": "*", "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py", "timeout": 130 }] }
     ],
     "Notification": [
       { "hooks": [{ "type": "command", "command": "python ~/.claude/klar_hook.py" }] }

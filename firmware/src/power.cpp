@@ -19,6 +19,12 @@ void power_init(void) {
         return;
     }
     Serial.println("PMU: AXP2101 init OK");
+    {
+        char d[80];
+        pmu_ok = true;
+        power_diag(d, sizeof(d));
+        Serial.printf("PMU: %s\n", d);
+    }
 
     // Turn on the measurements we read below. Without these the gauge / voltage
     // registers stay zeroed.
@@ -27,6 +33,20 @@ void power_init(void) {
     pmu.enableVbusVoltageMeasure();
     pmu.enableSystemVoltageMeasure();
 
+    // Never let the PMU latch the whole board off on a brief rail dip. With no
+    // battery fitted the AXP2101 holds VSYS at only ~3.67 V, so the 3.3 V buck
+    // has almost no headroom and a load spike (radio + flash write + display)
+    // trips the "DCDC below 85%" protection — the board then stays dark until
+    // someone re-powers it (power-off cause bit 'v' in power_diag()). With the
+    // turn-off disabled, the worst case is an ESP32 brownout reset, which
+    // recovers by itself. Over-voltage and over-temperature shutdown stay on.
+    // These bits reset when the PMU loses power, so set them on every boot.
+    pmu.disableDC1LowVoltageTurnOff();
+    pmu.disableDC2LowVoltageTurnOff();
+    pmu.disableDC3LowVoltageTurnOff();
+    pmu.disableDC4LowVoltageTurnOff();
+    pmu.disableDC5LowVoltageTurnOff();
+
     // DLDO1 powers the LCD backlight on this board. It's on by default (EFUSE),
     // but a prior power-save sleep followed by a soft reset would leave it off
     // (the PMU isn't reset by ESP.restart), so force it on at boot.
@@ -34,6 +54,33 @@ void power_init(void) {
 }
 
 void power_tick(void) {}
+
+// One-line PMU diagnostic: why the AXP2101 last cut power, and the supply
+// voltages now. The power-off bits latch in the PMU across ESP32 resets, so
+// this still tells the story after the board has been powered back on.
+//   off bits: T=over-temperature V=DCDC over-voltage v=DCDC under-voltage
+//             B=VBUS over-voltage S=VSYS under-voltage K=power key held
+//             W=software power-off P=power source pulled down
+void power_diag(char* out, size_t len) {
+    if (!pmu_ok) { snprintf(out, len, "pmu absent"); return; }
+    char off[9];
+    int n = 0;
+    if (pmu.isOverTemperatureOffSource()) off[n++] = 'T';
+    if (pmu.isDcOverVoltageOffSource())   off[n++] = 'V';
+    if (pmu.isDcUnderVoltageOffSource())  off[n++] = 'v';
+    if (pmu.isVbusOverVoltageOffSource()) off[n++] = 'B';
+    if (pmu.isVsysUnderVoltageOffSource())off[n++] = 'S';
+    if (pmu.isPwronAlwaysLowOffSource())  off[n++] = 'K';
+    if (pmu.isSwConfigOffSource())        off[n++] = 'W';
+    if (pmu.isPwrSourcePullDown())        off[n++] = 'P';
+    off[n] = '\0';
+    // ilim / vlim are the raw input-limit register codes (see XPowersParams.hpp:
+    // ilim 0..5 = 100/500/900/1000/1500/2000 mA, vlim 0..15 = 3.88 V + 80 mV steps).
+    snprintf(out, len, "off=%s vbus=%umV vsys=%umV batt=%d ilim=%u vlim=%u",
+             n ? off : "-", (unsigned)pmu.getVbusVoltage(),
+             (unsigned)pmu.getSystemVoltage(), pmu.isBatteryConnect() ? 1 : 0,
+             (unsigned)pmu.getVbusCurrentLimit(), (unsigned)pmu.getVbusVoltageLimit());
+}
 
 int power_battery_pct(void) {
     if (!pmu_ok || !pmu.isBatteryConnect()) return -1;  // no battery present

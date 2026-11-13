@@ -7,6 +7,13 @@ struct UsageData {
     int session_reset_mins;  // minutes until session resets
     float weekly_pct;        // 7-day window utilization (0-100)
     int weekly_reset_mins;   // minutes until weekly resets
+    // Model-scoped weekly limit (the per-model bar in `claude /usage`, e.g.
+    // "Fable"). Account-wide like the two above, but sourced from the OAuth
+    // usage endpoint rather than the rate-limit headers. scoped_pct < 0 means
+    // the account has no such limit — the Usage screen then shows two panels.
+    float scoped_pct;        // 0-100, or -1 when absent
+    int scoped_reset_mins;   // minutes until it resets (-1 unknown)
+    char scoped_name[12];    // model display name, e.g. "Fable"
     char status[16];         // "allowed" or "limited"
     bool ok;                 // data parse succeeded
     bool valid;              // false until first successful parse
@@ -21,7 +28,7 @@ struct UsageData {
     uint8_t opus_pct_week;   // share of this week's (rolling 7-day) tokens that ran on Opus
     uint8_t sonnet_pct_week; // ... on Sonnet
     uint8_t haiku_pct_week;  // ... on Haiku
-    uint8_t fable_pct_week;  // ... on Fable — this is the "Fable weekly %" bar seen in `claude /usage`
+    uint8_t fable_pct_week;  // ... on Fable (token share only — the real Fable limit is scoped_pct)
     uint8_t cache_hit_pct;   // cache_read / (cache_read + cache_creation + input) for today
     uint32_t tokens_today;   // total tokens consumed today (input + output + cache_*)
     uint16_t sessions_today; // number of distinct conversation files touched today
@@ -68,6 +75,12 @@ struct UsageData {
 
     // ---- Display ----
     uint8_t brightness;      // 0-100 (software dim overlay; 100 = full bright)
+
+    // ---- Stale-data indicator ----
+    // If no payload arrives for this long the firmware shows a "No update for
+    // N" pill so an old number is never mistaken for a current one. The daemon
+    // derives it from its poll interval (`stl`); 300 s when absent.
+    uint32_t stale_secs;
 
     // ---- Power save ----
     // When enabled, the firmware blanks the LCD backlight (AXP2101 DLDO1) after

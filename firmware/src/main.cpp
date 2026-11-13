@@ -9,6 +9,10 @@
 #include "touch.h"
 #include "usage_rate.h"
 #include "power.h"
+#include "overlay.h"
+#include "ota.h"
+#include "version.h"
+#include <stdarg.h>
 
 // Physical buttons (global, screen-independent):
 //   BTN_BACK   (GPIO 0)  — left,  send Space (Claude Code voice mode push-to-talk)
@@ -109,6 +113,11 @@ static bool parse_json(const char* json, UsageData* out) {
     out->session_reset_mins = doc["sr"] | -1;
     out->weekly_pct = doc["w"] | 0.0f;
     out->weekly_reset_mins = doc["wr"] | -1;
+    // Model-scoped weekly limit (e.g. Fable). Absent on older daemons and on
+    // accounts without one → -1 → Usage screen keeps its two-panel layout.
+    out->scoped_pct = doc["fw"] | -1.0f;
+    out->scoped_reset_mins = doc["fwr"] | -1;
+    strlcpy(out->scoped_name, doc["fwn"] | "", sizeof(out->scoped_name));
     strlcpy(out->status, doc["st"] | "unknown", sizeof(out->status));
     out->ok = doc["ok"] | false;
 
@@ -202,8 +211,107 @@ static bool parse_json(const char* json, UsageData* out) {
         ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
     }
 
+    out->stale_secs = doc["stl"] | 300;
+
     out->valid = true;
     return true;
+}
+
+// ---- Daemon link: commands, permission prompts, firmware update ----
+//
+// Lines starting with '!' are commands rather than usage payloads, in both
+// directions and on both transports. Firmware that predates them ignores such
+// lines (USB) or nacks them (BLE) without touching the display, so the daemon
+// can probe with "!ver" safely.
+static uint32_t g_last_payload_ms = 0;   // millis() of the last good usage payload
+static bool     g_ota_from_ble = false;
+static int      g_ota_pct_shown = -1;
+
+// Send one line to the daemon on both transports.
+static void link_send(const char* fmt, ...) {
+    char line[160];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    Serial.println(line);
+    ble_notify_line(line);
+}
+
+static void ota_stop_ui(void) {
+    ble_raw_end();
+    overlay_ota_hide();
+    g_ota_pct_shown = -1;
+}
+
+// Feed firmware bytes; acks every full block on USB (BLE is paced by the
+// write-with-response itself).
+static void ota_data(const uint8_t* p, size_t n, bool usb) {
+    const char* err = "";
+    int r = ota_feed(p, n, &err);
+    if (r < 0) {
+        ota_stop_ui();
+        link_send("!ota err %s", err);
+        return;
+    }
+    int pct = (r == 1) ? 100 : ota_progress_pct();
+    if (pct != g_ota_pct_shown) {
+        g_ota_pct_shown = pct;
+        overlay_ota_show(pct, nullptr);
+    }
+    if (r == 0) {
+        if (usb && (ota_received() % OTA_USB_BLOCK) == 0)
+            link_send("!ota ack %u", (unsigned)ota_received());
+        return;
+    }
+    // Verified and marked bootable — tell the daemon, paint the last frame, reboot.
+    if (!usb) ble_raw_done();
+    overlay_ota_show(100, "Restarting");
+    link_send("!ota ok");
+    lv_timer_handler();
+    Serial.flush();
+    delay(800);
+    ESP.restart();
+}
+
+static void handle_command(const char* line, bool from_ble) {
+    if (strcmp(line, "!ver") == 0) {
+        link_send("!ver %s", argus_fw_version());
+    } else if (strcmp(line, "!pwr") == 0) {
+        char d[80];
+        power_diag(d, sizeof(d));
+        link_send("!pwr %s", d);
+    } else if (strncmp(line, "!ota ", 5) == 0) {
+        unsigned long size = 0;
+        char md5[33] = {0};
+        if (sscanf(line + 5, "%lu %32s", &size, md5) != 2) {
+            link_send("!ota err bad request");
+            return;
+        }
+        const char* err = "";
+        if (!ota_begin((size_t)size, md5, &err)) {
+            link_send("!ota err %s", err);
+            return;
+        }
+        g_ota_from_ble = from_ble;
+        g_ota_pct_shown = 0;
+        prompt_cancel(nullptr);
+        note_activity();
+        overlay_ota_show(0, nullptr);
+        if (from_ble) ble_raw_begin();
+        link_send("!ota ready %u", (unsigned)OTA_USB_BLOCK);
+    } else if (strncmp(line, "!prx", 4) == 0) {
+        const char* id = line + 4;
+        while (*id == ' ') id++;
+        prompt_cancel(id);
+    } else if (strncmp(line, "!pr ", 4) == 0) {
+        JsonDocument doc;
+        if (deserializeJson(doc, line + 4)) return;
+        const char* id = doc["id"] | "";
+        if (!id[0] || ota_active()) return;
+        prompt_show(id, doc["t"] | "", doc["d"] | "", doc["p"] | "", doc["to"] | 30);
+        note_activity();   // wake a blanked screen — someone is waiting on us
+    }
 }
 
 // Serial command buffer (sized to fit JSON usage payloads with headroom; must
@@ -247,12 +355,29 @@ static void send_screenshot() {
 
 static void check_serial_cmd() {
     while (Serial.available()) {
+        // Firmware update in flight over USB: the stream is raw image bytes
+        // until the announced size is in. Never read across a block boundary,
+        // so the ack the daemon waits for lands exactly on it.
+        if (ota_active() && !g_ota_from_ble) {
+            static uint8_t blk[512];
+            size_t want = OTA_USB_BLOCK - (ota_received() % OTA_USB_BLOCK);
+            if (want > sizeof(blk)) want = sizeof(blk);
+            if (want > ota_remaining()) want = ota_remaining();
+            size_t avail = (size_t)Serial.available();
+            if (want > avail) want = avail;
+            size_t n = Serial.readBytes(blk, want);
+            if (n) ota_data(blk, n, true);
+            cmd_pos = 0;
+            continue;
+        }
         char c = Serial.read();
         if (c == '\n' || c == '\r') {
             cmd_buf[cmd_pos] = '\0';
             if (cmd_pos > 0) {
                 if (strcmp(cmd_buf, "screenshot") == 0) {
                     send_screenshot();
+                } else if (cmd_buf[0] == '!') {
+                    handle_command(cmd_buf, false);
                 } else if (cmd_buf[0] == '{') {
                     handle_usb_usage_json(cmd_buf);
                 }
@@ -286,6 +411,7 @@ static void handle_usb_usage_json(const char* line) {
         Serial.printf("Auto-focused on %s\n", usage.focus_screen);
     }
     if (usage.changed) note_activity();  // wake the screen on real changes
+    g_last_payload_ms = millis();
     Serial.println("USB_USAGE_OK");
 }
 
@@ -353,6 +479,7 @@ void setup() {
 
     // Build dashboard
     ui_init();
+    overlay_init();
 
     // Show initial BLE status on Bluetooth screen
     ui_update_ble_status(ble_get_state(), ble_get_device_name(), ble_get_mac_address());
@@ -383,7 +510,12 @@ void loop() {
         if (back_now && !back_was) {
             // When the screen is blanked, the press only wakes it; otherwise it
             // cycles. Either way it counts as activity.
-            if (g_display_on) ui_cycle_screen();
+            // With a permission prompt up it hands the question back to the
+            // terminal instead ("Skip").
+            if (g_display_on) {
+                if (prompt_active()) prompt_skip();
+                else if (!ota_active()) ui_cycle_screen();
+            }
             note_activity();
         }
         back_was = back_now;
@@ -432,9 +564,50 @@ void loop() {
     // Check for serial commands (screenshot, etc.)
     check_serial_cmd();
 
+    // ---- Overlays: permission prompt answer, firmware update, stale pill ----
+    overlay_tick();
+    {
+        char id[16];
+        const char* decision = nullptr;
+        if (prompt_take_result(id, sizeof(id), &decision)) {
+            link_send("!pr %s %s", id, decision);
+            note_activity();
+        }
+    }
+    if (ota_active()) {
+        const uint8_t* p; size_t n;
+        if (g_ota_from_ble && ble_raw_take(&p, &n)) {
+            ota_data(p, n, false);
+            ble_raw_done();
+        }
+        if (ota_check_timeout()) {
+            ota_stop_ui();
+            link_send("!ota err timeout");
+        }
+        note_activity();   // keep the screen on while updating
+    }
+    {
+        // Stale pill — only once we've had data at least once; before that the
+        // screens already say "No data" / "Waiting for daemon".
+        static uint32_t last_check = 0;
+        if (millis() - last_check > 1000) {
+            last_check = millis();
+            int mins = -1;
+            if (usage.valid && g_last_payload_ms) {
+                uint32_t age_s = (millis() - g_last_payload_ms) / 1000;
+                uint32_t limit = usage.stale_secs ? usage.stale_secs : 300;
+                if (age_s > limit) mins = (int)(age_s / 60);
+            }
+            overlay_set_stale(mins);
+        }
+    }
+
     // Process incoming BLE data
     if (ble_has_data()) {
-        if (parse_json(ble_get_data(), &usage)) {
+        const char* msg = ble_get_data();
+        if (msg[0] == '!') {
+            handle_command(msg, true);
+        } else if (parse_json(msg, &usage)) {
             int g_before = usage_rate_group();
             usage_rate_sample(usage.session_pct);
             int g_after = usage_rate_group();
@@ -448,11 +621,12 @@ void loop() {
                 Serial.printf("Auto-focused on %s\n", usage.focus_screen);
             }
             if (usage.changed) note_activity();  // wake the screen on real changes
+            g_last_payload_ms = millis();
             ble_send_ack();
         } else {
             ble_send_nack();
         }
     }
 
-    delay(5);
+    if (!ota_active()) delay(5);   // spin flat-out while flashing
 }

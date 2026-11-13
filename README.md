@@ -51,7 +51,7 @@ The device pairs the first time it sees the daemon; from then on it reconnects a
 
 The device boots into the splash and stays there until you press the BOOT button, which cycles `Splash → Usage → Today → GitHub → CI → Copilot → Bluetooth`. Screens you've unchecked in the tray app are skipped. Tap the screen anywhere (except the Reset zone on the Bluetooth screen) to flip back to the splash; tap again to dismiss it.
 
-**Usage** shows the 5-hour-window session utilization (`Current`) and the 7-day weekly utilization. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours. A footer line shows your most recently active project, session count, and — only on days you've used it — Fable's share of today's tokens (local-machine-only, same caveat as the Today screen below).
+**Usage** shows the 5-hour-window session utilization (`Current`), the 7-day weekly utilization (`Weekly`) and — when your plan has one — the model-scoped weekly limit (`Fable weekly`), the same three bars as `claude /usage`. All three are account-wide. With no model-scoped limit on the account the screen keeps its two larger panels. Bars turn green / amber / red at 50% / 80%. Reset times count down in minutes/hours. A footer line shows your most recently active project and session count.
 
 **Today** shows the API-equivalent cost of today's tokens (labeled "API equiv." — on a Max subscription you don't pay this, but it shows how much the subscription is saving you), the 7-day rolling cost, the Opus / Sonnet / Haiku / Fable token split, cache hit rate, most recently active project, and sessions started today. All of it is parsed from `~/.claude/projects/**/*.jsonl` by the daemon, so it works even when the API is down — but it also means these numbers only cover Claude Code sessions run *on the machine the daemon is running on*, by default. If you also use Claude Code from other machines — e.g. Linux servers you SSH into — add them under **Claude → Remote Claude Code hosts** in the tray settings as a comma-separated list of `~/.ssh/config` host aliases; the daemon SSHes in every few minutes (key-based auth only, no password ever touches it) and folds their usage into the numbers above. The Windows/macOS Claude desktop app isn't covered — it's a different product with no local logs to read. Only the Usage screen's rate-limit bars above are account-wide by default (Anthropic pools that quota across every surface — chat, desktop app, and Claude Code).
 
@@ -173,6 +173,29 @@ Both BLE and USB-C carry the same JSON payload, newline-terminated. Over BLE it'
 | REQ Characteristic (notify)| `4c41555a-4465-7669-6365-000000000004` |
 | **HID Service**            | `00001812-0000-1000-8000-00805f9b34fb` |
 
+### Permission prompts on the device
+
+With the optional `PermissionRequest` hook installed (see `hooks/settings.sample.json`), every Claude Code permission prompt is also shown on Argus: the tool, what it wants to do, the project, and **Deny / Skip / Allow** buttons. A tap is returned to Claude Code as the decision — nothing is typed into any window, and it works over USB and Bluetooth alike. **Skip**, the BOOT button, or letting the countdown run out hands the question back to the terminal. The hook holds the request while the device is asking, so the terminal prompt appears after that wait (`prompt_timeout` in the daemon config, default 30 s); with no device connected the hook returns immediately. Commands longer than the screen end in `...(+N more)` so a hidden tail is always announced. Set `device_prompts` to `false` in the config to switch the feature off without touching the hook.
+
+### Firmware updates without the cable
+
+Once a device runs firmware with update support, new builds install over the link the daemon already uses:
+
+```bash
+python daemon/argus-daemon.py --ota                     # install the published build
+python daemon/argus-daemon.py --ota path/to/firmware.bin   # install a local build
+```
+
+The tray menu's **Update device firmware** does the same as the first form. The image goes into the inactive app slot and is only made bootable after its checksum matches, so a dropped link leaves the running firmware in place. USB takes well under a minute; Bluetooth takes a few minutes. The device shows progress and restarts itself. Firmware older than this feature has to be flashed by cable one last time.
+
+### Stale data
+
+If no payload arrives for three poll intervals, a "No update for N" pill appears at the bottom of every screen, so numbers from a stopped daemon or a dropped link aren't mistaken for current ones. It clears on the next payload.
+
+### Command channel
+
+Besides the payload, daemon and device exchange short lines that start with `!` (`!ver`, `!pr`, `!prx`, `!ota`); over Bluetooth the device's side arrives as notifications on the TX characteristic. Firmware that predates them ignores such lines. The grammar is documented at the top of `daemon/device_link.py`.
+
 ### Payload
 
 Keys are short to keep the payload small. It's streamed to the device in newline-terminated chunks and reassembled on the firmware, so it isn't bound by the 512-octet single-write BLE limit. The firmware ignores keys it doesn't recognize, so the two sides can version independently.
@@ -180,6 +203,7 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 ```json
 {
   "s": 45, "sr": 120, "w": 28, "wr": 7200, "st": "allowed", "ok": true,
+  "fw": 69, "fwr": 7200, "fwn": "Fable",
   "c": 3.47, "cw": 12.30, "mo": 45, "ms": 40, "mh": 5, "mf": 10,
   "mow": 38, "msw": 42, "mhw": 8, "mfw": 12,
   "ch": 82, "tk": 234567, "se": 3, "pj": "argus",
@@ -198,10 +222,12 @@ Keys are short to keep the payload small. It's streamed to the device in newline
 | --- | --- |
 | `s` / `sr` | session % (5-hour window) / minutes until it resets |
 | `w` / `wr` | weekly % / minutes until it resets |
+| `fw` / `fwr` / `fwn` | model-scoped weekly limit % / minutes until it resets / model name (e.g. `Fable`) — account-wide, read from the OAuth usage endpoint (`plan_usage.py`); omitted when the plan has no such limit or the daemon is using an API key |
+| `stl` | seconds without a payload after which the device shows its "No update for N" pill (three poll intervals; 300 if absent) |
 | `st` / `ok` | rate-limit status / poll succeeded |
 | `c` / `cw` | USD spent today / in the last 7 days (API-equivalent) |
 | `mo` / `ms` / `mh` / `mf` | Opus / Sonnet / Haiku / Fable token share today, % (all four are local-machine-only — see note below) |
-| `mow` / `msw` / `mhw` / `mfw` | Opus / Sonnet / Haiku / Fable token share this week (rolling 7 days), % — same local-only computation as `mo`/`ms`/`mh`/`mf`, just windowed weekly; `mfw` is the "Fable weekly %" bar shown on the Today screen and in `claude /usage` |
+| `mow` / `msw` / `mhw` / `mfw` | Opus / Sonnet / Haiku / Fable token share this week (rolling 7 days), % — same local-only computation as `mo`/`ms`/`mh`/`mf`, just windowed weekly. Token shares, not quota: the Fable weekly *limit* is `fw` |
 | `ch` / `tk` / `se` | cache hit rate % / tokens today / distinct sessions today |
 | `pj` | most recently active project (basename) |
 | `ge` / `gi` / `gp` | GitHub enabled / open issues assigned / open PRs awaiting you |

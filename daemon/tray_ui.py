@@ -99,6 +99,9 @@ DEFAULTS = {
                                # logs get folded into the Today screen's cost/tokens/model split
     "klar_lamp_enabled": True, # run the Klar-lampan output (LilyGO T-Dongle) + its hook listener
     "klar_hook_port": 47600,   # loopback TCP port the Claude Code hooks send session events to
+    "device_prompts": True,    # answer Claude Code permission prompts on the Argus device (needs the PermissionRequest hook)
+    "prompt_timeout": 30,      # seconds a prompt waits on the device before falling back to the terminal
+    "firmware_url": "https://pierregode.github.io/Argus/",  # site whose version.json names the published firmware
 }
 
 # Apps known to the system. The Visibility checkbox in each tab toggles
@@ -582,7 +585,8 @@ def _make_app_icon():
 
 # ----- Qt main window -------------------------------------------------------
 
-def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> bool:
+def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
+            on_update: Callable[[], None] | None = None) -> bool:
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import (
@@ -1177,6 +1181,12 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
     act_quit.triggered.connect(_do_quit)
 
     menu.addAction(act_show)
+    if on_update is not None:
+        # Installs the published firmware over the current link (BLE or USB).
+        # Progress and the outcome land in the status line + log view.
+        act_update = QAction("Update device firmware", menu)
+        act_update.triggered.connect(lambda _checked=False: on_update())
+        menu.addAction(act_update)
     menu.addSeparator()
     menu.addAction(act_quit)
     tray.setContextMenu(menu)
@@ -1192,7 +1202,8 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event) -> boo
     return True
 
 
-def run_tray(on_save: Callable[[dict], None], stop_event: threading.Event) -> bool:
+def run_tray(on_save: Callable[[dict], None], stop_event: threading.Event,
+             on_update: Callable[[], None] | None = None) -> bool:
     """Block the calling thread on the Qt event loop.
 
     Returns False immediately if PySide6 can't be imported or no system tray
@@ -1210,7 +1221,7 @@ def run_tray(on_save: Callable[[dict], None], stop_event: threading.Event) -> bo
         return False
 
     try:
-        return _run_qt(on_save, stop_event)
+        return _run_qt(on_save, stop_event, on_update)
     except Exception as e:
         print(f"[tray] Qt failed to start: {e}", flush=True)
         return False

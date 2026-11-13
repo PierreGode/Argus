@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import select
 import socket
 import socketserver
 import threading
@@ -64,7 +65,7 @@ def _hook_event_to_mode(event: str) -> str | None:
         return MODE_WORK
     if event in ("PreToolUse", "PostToolUse"):
         return MODE_WORK
-    if event in ("Notification",):
+    if event in ("Notification", "PermissionRequest"):
         return MODE_WAIT
     if event in ("Stop",):
         return MODE_DONE
@@ -323,10 +324,17 @@ class SessionStore:
 # --- Loopback TCP hook listener --------------------------------------------
 
 def start_hook_listener(store: SessionStore, port: int = DEFAULT_HOOK_PORT,
-                        log: Callable[[str], None] | None = None):
+                        log: Callable[[str], None] | None = None,
+                        responder: Callable[[dict, Callable[[], bool]], str] | None = None):
     """Start a loopback TCP server that feeds `store`. Each connection delivers
     one hook event as a JSON line. Returns the server (call .shutdown() to stop)
-    or None if the port couldn't be bound. Runs on a daemon thread."""
+    or None if the port couldn't be bound. Runs on a daemon thread.
+
+    `responder`, when given, is asked to decide `PermissionRequest` events:
+    it gets the event plus a `cancelled()` probe (true once the hook process
+    has gone away, e.g. the user answered in the terminal) and returns
+    "allow" / "deny" / "". The answer goes back on the same connection as one
+    JSON line, `{"decision": "..."}`, which the hook script is waiting for."""
     log = log or (lambda m: None)
 
     class _Handler(socketserver.StreamRequestHandler):
@@ -348,6 +356,32 @@ def start_hook_listener(store: SessionStore, port: int = DEFAULT_HOOK_PORT,
                     store.handle_event(evt)
                 except Exception as e:   # never let a bad event kill the listener
                     log(f"hook event error: {e}")
+                if responder and evt.get("hook_event_name") == "PermissionRequest":
+                    self._respond(evt)
+
+        def _peer_gone(self) -> bool:
+            # The hook sends nothing after its one line, so the socket only
+            # turns readable when the hook process exits and closes it.
+            try:
+                readable, _, _ = select.select([self.connection], [], [], 0)
+                if readable:
+                    return self.connection.recv(1, socket.MSG_PEEK) == b""
+            except (OSError, ValueError):
+                return True
+            return False
+
+        def _respond(self, evt: dict) -> None:
+            try:
+                decision = responder(evt, self._peer_gone) or ""
+            except Exception as e:
+                log(f"permission responder error: {e}")
+                decision = ""
+            try:
+                self.wfile.write(
+                    (json.dumps({"decision": decision}) + "\n").encode("utf-8"))
+                self.wfile.flush()
+            except OSError:
+                pass   # hook already gone — nothing to tell
 
     class _Server(socketserver.ThreadingTCPServer):
         allow_reuse_address = True

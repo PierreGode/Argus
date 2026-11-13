@@ -32,13 +32,7 @@ HANDSHAKE_TIMEOUT = 1.0
 def _open_serial(port: str, baud: int):
     """Open DTR/RTS-low so the ESP32-S3 native USB doesn't auto-reset on open
     (same trick run_serial uses for Argus)."""
-    import serial
-    ser = serial.Serial(None, baud, timeout=0, dsrdtr=False, rtscts=False)
-    ser.port = port
-    ser.dtr = False
-    ser.rts = False
-    ser.open()
-    return ser
+    return usb_arbiter.open_no_reset(port, baud, timeout=0)
 
 
 def _demo_snapshot() -> dict:

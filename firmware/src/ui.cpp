@@ -42,6 +42,15 @@ static lv_obj_t* bar_weekly;
 static lv_obj_t* lbl_weekly_pct;
 static lv_obj_t* lbl_weekly_label;
 static lv_obj_t* lbl_weekly_reset;
+// Third panel: model-scoped weekly limit (e.g. "Fable weekly"). Only shown when
+// the daemon reports one; the three panels then switch to a compact layout.
+static lv_obj_t* bar_scoped;
+static lv_obj_t* lbl_scoped_pct;
+static lv_obj_t* lbl_scoped_label;
+static lv_obj_t* lbl_scoped_reset;
+static lv_obj_t* pnl_session;
+static lv_obj_t* pnl_weekly;
+static lv_obj_t* pnl_scoped;
 // Bottom strip of the Claude Usage screen. Used to host the spinner +
 // "Thinking…" rotating verb; now repurposed as the session-footer text
 // ("<project> - N sessions") moved over from the Today screen.
@@ -202,9 +211,11 @@ static lv_obj_t* make_pill(lv_obj_t* parent, const char* text) {
 // Pill y=1: symmetric inside the panel — panel-outer-top → pill-top equals
 // pill-bottom → bar-top (pill height 42 + panel pad_top 12 + bar y=56).
 static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
+                             lv_obj_t** out_panel,
                              lv_obj_t** out_pct, lv_obj_t** out_pill,
                              lv_obj_t** out_bar, lv_obj_t** out_reset) {
     lv_obj_t* panel = make_panel(parent, MARGIN, y, CONTENT_W, PANEL_H);
+    *out_panel = panel;
 
     *out_pct = lv_label_create(panel);
     lv_label_set_text(*out_pct, "No data");
@@ -224,6 +235,63 @@ static void make_usage_panel(lv_obj_t* parent, int y, const char* pill_text,
     lv_obj_set_pos(*out_reset, 0, 94);
 }
 
+// Compact geometry used when a third (model-scoped) panel is present: three
+// 98px panels + 10px gaps fill the same 100..414 band the two 150px panels
+// occupy, leaving the footer where it is. Inside each: big % left, pill
+// top-right with the reset countdown tucked under it, thin bar along the bottom.
+#define PANEL3_H    98
+#define PANEL3_GAP  10
+
+static void usage_layout_panel(lv_obj_t* panel, lv_obj_t* pct, lv_obj_t* pill,
+                               lv_obj_t* bar, lv_obj_t* reset,
+                               int slot, bool compact) {
+    (void)pct;   // the big % keeps its font and (0,0) position in both modes
+    if (compact) {
+        lv_obj_set_y(panel, CONTENT_Y + slot * (PANEL3_H + PANEL3_GAP));
+        lv_obj_set_height(panel, PANEL3_H);
+        lv_obj_set_style_text_font(pill, &font_styrene_24, 0);
+        lv_obj_set_style_pad_left(pill, 14, 0);
+        lv_obj_set_style_pad_right(pill, 14, 0);
+        lv_obj_set_style_pad_top(pill, 4, 0);
+        lv_obj_set_style_pad_bottom(pill, 4, 0);
+        lv_obj_align(pill, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_set_style_text_font(reset, &font_styrene_20, 0);
+        lv_obj_align(reset, LV_ALIGN_TOP_RIGHT, -4, 35);
+        lv_obj_set_pos(bar, 0, 60);
+        lv_obj_set_height(bar, 14);
+    } else {
+        lv_obj_set_y(panel, CONTENT_Y + slot * (PANEL_H + PANEL_GAP));
+        lv_obj_set_height(panel, PANEL_H);
+        lv_obj_set_style_text_font(pill, &font_styrene_28, 0);
+        lv_obj_set_style_pad_left(pill, 18, 0);
+        lv_obj_set_style_pad_right(pill, 18, 0);
+        lv_obj_set_style_pad_top(pill, 6, 0);
+        lv_obj_set_style_pad_bottom(pill, 6, 0);
+        lv_obj_align(pill, LV_ALIGN_TOP_RIGHT, 0, 1);
+        lv_obj_set_style_text_font(reset, &font_styrene_28, 0);
+        lv_obj_align(reset, LV_ALIGN_TOP_LEFT, 0, 94);
+        lv_obj_set_pos(bar, 0, 56);
+        lv_obj_set_height(bar, 24);
+    }
+}
+
+// Switch the Usage screen between two big panels (Current / Weekly) and three
+// compact ones (+ model-scoped weekly). No-op when the mode hasn't changed.
+static void usage_apply_layout(bool show_scoped) {
+    static int8_t applied = -1;
+    if (applied == (int8_t)show_scoped) return;
+    applied = (int8_t)show_scoped;
+
+    usage_layout_panel(pnl_session, lbl_session_pct, lbl_session_label,
+                       bar_session, lbl_session_reset, 0, show_scoped);
+    usage_layout_panel(pnl_weekly, lbl_weekly_pct, lbl_weekly_label,
+                       bar_weekly, lbl_weekly_reset, 1, show_scoped);
+    usage_layout_panel(pnl_scoped, lbl_scoped_pct, lbl_scoped_label,
+                       bar_scoped, lbl_scoped_reset, 2, true);
+    if (show_scoped) lv_obj_clear_flag(pnl_scoped, LV_OBJ_FLAG_HIDDEN);
+    else             lv_obj_add_flag(pnl_scoped, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void init_usage_screen(lv_obj_t* scr) {
     usage_container = lv_obj_create(scr);
     lv_obj_set_size(usage_container, SCR_W, SCR_H);
@@ -240,22 +308,27 @@ static void init_usage_screen(lv_obj_t* scr) {
     lv_obj_set_style_text_color(lbl_title, COL_TEXT, 0);
     lv_obj_align(lbl_title, LV_ALIGN_TOP_MID, 16, TITLE_Y);
 
-    make_usage_panel(usage_container, CONTENT_Y, "Current",
+    make_usage_panel(usage_container, CONTENT_Y, "Current", &pnl_session,
                      &lbl_session_pct, &lbl_session_label,
                      &bar_session, &lbl_session_reset);
     make_usage_panel(usage_container, CONTENT_Y + PANEL_H + PANEL_GAP, "Weekly",
+                     &pnl_weekly,
                      &lbl_weekly_pct, &lbl_weekly_label,
                      &bar_weekly, &lbl_weekly_reset);
+    // Model-scoped weekly limit — hidden until the daemon reports one.
+    make_usage_panel(usage_container, CONTENT_Y, "Fable weekly", &pnl_scoped,
+                     &lbl_scoped_pct, &lbl_scoped_label,
+                     &bar_scoped, &lbl_scoped_reset);
+    usage_apply_layout(false);
 
     // Session footer — was on the Today screen as "<project> - N sessions".
     // The spinner + verb animation that used to live here is gone (the user
-    // didn't want it). Same style as the old Today footer. Also carries the
-    // Fable token-share when there is one — see ui_update().
+    // didn't want it). Same style as the old Today footer.
     lbl_usage_footer = lv_label_create(usage_container);
     lv_label_set_text(lbl_usage_footer, "");
     lv_obj_set_style_text_font(lbl_usage_footer, &font_styrene_24, 0);
     lv_obj_set_style_text_color(lbl_usage_footer, COL_DIM, 0);
-    // Long project names + session count (+ optional Fable %) can overflow
+    // Long project names + session count can overflow
     // CONTENT_W at this font size, so scroll marquee-style rather than
     // clipping — same fix as the Today screen's model-split line.
     lv_obj_set_width(lbl_usage_footer, CONTENT_W - 32);
@@ -789,6 +862,7 @@ void ui_update(const UsageData* data) {
         lv_label_set_text(lbl_weekly_pct,      "No data");
         lv_label_set_text(lbl_weekly_reset,    "");
         lv_bar_set_value(bar_weekly, 0, LV_ANIM_OFF);
+        usage_apply_layout(false);
 
         lv_label_set_text(lbl_today_cost,      "No data");
         lv_label_set_text(lbl_today_week,      "");
@@ -834,6 +908,20 @@ void ui_update(const UsageData* data) {
     format_reset_time(data->weekly_reset_mins, buf, sizeof(buf));
     lv_label_set_text(lbl_weekly_reset, buf);
 
+    // Model-scoped weekly limit (e.g. Fable) — the real account-wide quota,
+    // same number as the per-model bar in `claude /usage`.
+    bool has_scoped = data->scoped_pct >= 0.0f && data->scoped_name[0] != '\0';
+    if (has_scoped) {
+        int f_pct = (int)(data->scoped_pct + 0.5f);
+        lv_label_set_text_fmt(lbl_scoped_pct, "%d%%", f_pct);
+        lv_bar_set_value(bar_scoped, f_pct > 100 ? 100 : f_pct, LV_ANIM_ON);
+        lv_obj_set_style_bg_color(bar_scoped, pct_color(data->scoped_pct), LV_PART_INDICATOR);
+        lv_label_set_text_fmt(lbl_scoped_label, "%s weekly", data->scoped_name);
+        format_reset_time(data->scoped_reset_mins, buf, sizeof(buf));
+        lv_label_set_text(lbl_scoped_reset, buf);
+    }
+    usage_apply_layout(has_scoped);
+
     // ---- Today screen ----
     // Cost — show 3 decimals under a dollar (you can spot a $0.12 day), 2
     // otherwise. NOTE: LVGL's lv_label_set_text_fmt does NOT support %f unless
@@ -847,15 +935,11 @@ void ui_update(const UsageData* data) {
     }
     lv_label_set_text(lbl_today_cost, cost_buf);
 
-    // Appends "Fable NN%" — the same weekly Fable share shown in `claude
-    // /usage`'s Fable bar, computed locally the same way the daily model
-    // split is (see docs/adr/0001-today-view-is-local-machine-only.md) —
-    // only when there is one, so the common case (no Fable usage) is unchanged.
-    char week_buf[48];
-    int wn = snprintf(week_buf, sizeof(week_buf), "Week: $%.2f", data->cost_week);
-    if (data->fable_pct_week > 0 && wn > 0 && (size_t)wn < sizeof(week_buf)) {
-        snprintf(week_buf + wn, sizeof(week_buf) - wn, "  -  Fable %d%%", (int)data->fable_pct_week);
-    }
+    // Week cost only. This line used to append a local Fable token share
+    // labelled like a quota; the real Fable weekly limit now has its own panel
+    // on the Usage screen, so the look-alike number is gone.
+    char week_buf[32];
+    snprintf(week_buf, sizeof(week_buf), "Week: $%.2f", data->cost_week);
     lv_label_set_text(lbl_today_week, week_buf);
 
     int cache_pct = data->cache_hit_pct;
@@ -879,19 +963,14 @@ void ui_update(const UsageData* data) {
     // Show/hide the cost + cache panels per the daemon's toggles.
     today_apply_layout(data->today_show_cost, data->today_show_cache);
 
-    // Base line is "<project> - N sessions"; append the Fable share only when
-    // there is one, so the common case (no Fable usage today) stays unchanged.
-    // Fable's per-model split can only be computed from local Claude Code
-    // session logs (unlike the two panels above, which come from Anthropic's
-    // account-wide rate-limit headers) — see docs/adr/0001-today-view-is-local-machine-only.md.
+    // "<project> - N sessions". (Today's Fable token share still shows in the
+    // Today screen's model-split line; the Fable *limit* is the panel above.)
     char footer[96];
     const char* proj = (data->project[0] != '\0') ? data->project : "(no project)";
-    int n = (data->sessions_today == 1)
-        ? snprintf(footer, sizeof(footer), "%s  -  1 session", proj)
-        : snprintf(footer, sizeof(footer), "%s  -  %u sessions", proj, (unsigned)data->sessions_today);
-    if (data->fable_pct > 0 && n > 0 && (size_t)n < sizeof(footer)) {
-        snprintf(footer + n, sizeof(footer) - n, "  -  Fable %d%%", (int)data->fable_pct);
-    }
+    if (data->sessions_today == 1)
+        snprintf(footer, sizeof(footer), "%s  -  1 session", proj);
+    else
+        snprintf(footer, sizeof(footer), "%s  -  %u sessions", proj, (unsigned)data->sessions_today);
     lv_label_set_text(lbl_usage_footer, footer);
 
     // ---- GitHub screen ----

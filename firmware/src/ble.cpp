@@ -82,6 +82,13 @@ static volatile bool data_ready = false;
 static volatile bool has_received_data = false;
 static char mac_str[18];
 
+// Raw (firmware-update) mode — see ble.h.
+static volatile bool raw_mode = false;
+static volatile bool raw_pending = false;
+static uint8_t raw_blk[520];
+static volatile size_t raw_len = 0;
+static SemaphoreHandle_t raw_sem = nullptr;
+
 static void start_advertising() {
     NimBLEAdvertising* adv = NimBLEDevice::getAdvertising();
     adv->reset();
@@ -104,6 +111,8 @@ class ServerCallbacks : public NimBLEServerCallbacks {
         state = BLE_STATE_DISCONNECTED;
         need_advertise = true;
         rx_accum_len = 0;  // drop any half-received payload so the next link starts clean
+        raw_mode = false;  // an update in flight dies with the link (ota times out)
+        raw_pending = false;
         Serial.printf("BLE: disconnected (reason=%d)\n", reason);
     }
 
@@ -119,6 +128,17 @@ class RxCallbacks : public NimBLECharacteristicCallbacks {
         std::string val = chr->getValue();
         const char* data = val.data();
         size_t n = val.length();
+        if (raw_mode) {
+            // Hand the block to the main loop and hold this write (and so the
+            // daemon's write-with-response) until it has been flashed.
+            if (n > sizeof(raw_blk)) n = sizeof(raw_blk);
+            memcpy(raw_blk, data, n);
+            raw_len = n;
+            xSemaphoreTake(raw_sem, 0);          // clear any stale token
+            raw_pending = true;
+            xSemaphoreTake(raw_sem, pdMS_TO_TICKS(10000));
+            return;
+        }
         for (size_t i = 0; i < n; i++) {
             char c = data[i];
             if (c == '\n') {
@@ -151,6 +171,7 @@ class ReqCallbacks : public NimBLECharacteristicCallbacks {
 };
 
 void ble_init(void) {
+    raw_sem = xSemaphoreCreateBinary();
     load_device_name();
     NimBLEDevice::init(device_name);
     NimBLEDevice::setSecurityAuth(true, false, true);  // bonding, no MITM, SC
@@ -295,6 +316,36 @@ void ble_request_refresh(void) {
         req_char->notify();
         Serial.println("BLE: refresh requested");
     }
+}
+
+void ble_notify_line(const char* line) {
+    if (state != BLE_STATE_CONNECTED || !tx_char || !line) return;
+    tx_char->setValue((const uint8_t*)line, strlen(line));
+    tx_char->notify();
+}
+
+void ble_raw_begin(void) {
+    raw_pending = false;
+    rx_accum_len = 0;
+    raw_mode = true;
+}
+
+void ble_raw_end(void) {
+    raw_mode = false;
+    raw_pending = false;
+    if (raw_sem) xSemaphoreGive(raw_sem);   // release a write still waiting on us
+}
+
+bool ble_raw_take(const uint8_t** data, size_t* len) {
+    if (!raw_pending) return false;
+    *data = raw_blk;
+    *len = raw_len;
+    return true;
+}
+
+void ble_raw_done(void) {
+    raw_pending = false;
+    if (raw_sem) xSemaphoreGive(raw_sem);
 }
 
 void ble_keyboard_press(uint8_t key, uint8_t modifier) {

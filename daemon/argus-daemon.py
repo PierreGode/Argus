@@ -27,6 +27,9 @@ import remote_claude_logs
 import github_stats
 import copilot_stats
 import ci_stats
+import plan_usage
+import device_link
+import firmware_update
 import tray_ui
 from version import __version__
 
@@ -39,6 +42,7 @@ from outputs import ArgusOutput, KlarLampOutput, OutputManager, RunContext
 # ---- BLE UUIDs (must match firmware ble.cpp) ----
 SERVICE_UUID    = "4c41555a-4465-7669-6365-000000000001"
 RX_CHAR_UUID    = "4c41555a-4465-7669-6365-000000000002"
+TX_CHAR_UUID    = "4c41555a-4465-7669-6365-000000000003"   # device -> daemon '!' lines
 DEVICE_NAME     = "Argus Controller"
 POLL_INTERVAL   = 60   # seconds between API polls
 RECONNECT_DELAY = 2    # seconds between reconnect attempts
@@ -54,6 +58,55 @@ def log(msg: str):
         tray_ui.log_line(line)
     except Exception:
         pass
+
+# Command channel shared by the transport loops, the hook listener (permission
+# prompts) and the firmware updater. See device_link.py.
+LINK = device_link.DeviceLink(log)
+
+
+def permission_responder(evt: dict, cancelled) -> str:
+    """Decide a Claude Code PermissionRequest on the Argus device. Returns
+    "allow" / "deny", or "" to let Claude Code ask in the terminal."""
+    cfg = tray_ui.load_config()
+    if not cfg.get("device_prompts", True) or not LINK.ready:
+        return ""
+    try:
+        timeout = max(5, min(110, int(cfg.get("prompt_timeout", 30))))
+    except (TypeError, ValueError):
+        timeout = 30
+    info = device_link.prompt_info(evt)
+    log(f"Permission prompt on device: {info['t']}: {info['d'][:80]}")
+    answer = LINK.request_prompt(info, timeout, cancelled)
+    log(f"Permission prompt: {answer or 'no decision - back to the terminal'}")
+    return answer
+
+
+def start_firmware_update(source: str = "latest") -> device_link.OtaJob | None:
+    """Queue a firmware update for the connected device. `source` is "latest"
+    (the published build) or a path to a local .bin. Returns the job (wait on
+    job.done), or None when the device already runs the published build. Raises
+    FirmwareError / OtaError with a user-facing message otherwise."""
+    if not LINK.ready:
+        raise device_link.OtaError(
+            "device not connected, or its firmware predates updates over the "
+            "daemon link (flash it once by cable)")
+    if source == "latest":
+        base = tray_ui.load_config().get("firmware_url") or firmware_update.DEFAULT_BASE_URL
+        info = firmware_update.published(base)
+        if info["build"] == LINK.fw_version:
+            log(f"Firmware is up to date ({info['build']})")
+            return None
+        log(f"Firmware update: {LINK.fw_version} -> {info['build']}, downloading")
+        data = firmware_update.download(info)
+        label = info["build"]
+    else:
+        data = firmware_update.load_file(source)
+        label = Path(source).name
+    job = device_link.OtaJob(data, label)
+    LINK.submit_ota(job)
+    log(f"Firmware update queued: {label} ({job.size} bytes)")
+    return job
+
 
 def read_credentials() -> dict:
     """Read the OAuth block from ~/.claude/.credentials.json.
@@ -304,9 +357,9 @@ def poll_usage(token: str) -> dict:
         s7d_util  = float(h.get("anthropic-ratelimit-unified-7d-utilization", "0"))
         s7d_reset = int(h.get("anthropic-ratelimit-unified-7d-reset", "0"))
         status    = h.get("anthropic-ratelimit-unified-5h-status", "unknown")
-        sp = int(s5h_util * 100)
+        sp = int(round(s5h_util * 100))
         sr = max(0, int((s5h_reset - now) / 60))
-        wp = int(s7d_util * 100)
+        wp = int(round(s7d_util * 100))
         wr = max(0, int((s7d_reset - now) / 60))
     elif tok_limit_hdr is not None:
         # Standard rate limits (API key based) — show token usage percentage
@@ -374,6 +427,73 @@ def poll_usage(token: str) -> dict:
     return result
 
 
+# Plan-usage endpoint cache (see plan_usage.py). This is what carries the
+# per-model weekly limit — the "Fable" bar in `claude /usage` — which the
+# rate-limit headers above don't expose. Refreshed at most every
+# _PLAN_USAGE_TTL seconds; on a failed refresh the last good reading is reused
+# for up to _PLAN_USAGE_STALE_S so the panel doesn't flicker away on a blip,
+# then dropped so a dead number is never shown indefinitely.
+_plan_cache = {"at": 0.0, "data": None, "token": None}
+_PLAN_USAGE_TTL = 120
+_PLAN_USAGE_STALE_S = 1800
+
+
+def _plan_usage(token: str) -> dict | None:
+    """Cached plan_usage.fetch(). None for API keys / when nothing usable."""
+    if not token.startswith("sk-ant-oat"):
+        return None
+    now = time.time()
+    fresh = _plan_cache["data"] is not None and _plan_cache["token"] == token
+    if fresh and (now - _plan_cache["at"]) < _PLAN_USAGE_TTL:
+        return _plan_cache["data"]
+    try:
+        d = plan_usage.fetch(token)
+        _plan_cache.update({"at": now, "data": d, "token": token, "ok_at": now})
+        return d
+    except plan_usage.PlanUsageError as e:
+        log(f"Plan usage fetch failed: {e}")
+        last_ok = _plan_cache.get("ok_at", 0.0)
+        if _plan_cache["data"] is not None and (now - last_ok) < _PLAN_USAGE_STALE_S:
+            # Back off a full TTL before retrying, but keep serving the reading.
+            _plan_cache["at"] = now
+            _plan_cache["token"] = token
+            return _plan_cache["data"]
+        _plan_cache["data"] = None
+        return None
+
+
+def _apply_plan_usage(fields: dict, plan: dict | None) -> None:
+    """Merge the plan-usage reading into the payload fields:
+
+      • `fw` / `fwr` / `fwn` — model-scoped weekly limit % / minutes to reset /
+        model name ("Fable"). Omitted when the account has no such limit, and
+        the firmware then keeps its two-panel Usage layout.
+      • If the header read produced no real numbers (idle / unavailable /
+        auth-error fallbacks), fill `s`/`sr`/`w`/`wr` from here instead of 0%.
+    """
+    if not plan:
+        return
+    now = int(time.time())
+
+    def _mins(reset: int) -> int:
+        return max(0, int((reset - now) / 60)) if reset else -1
+
+    sc = plan.get("scoped")
+    # A reading whose window already rolled over is stale — skip it rather
+    # than show last week's percentage against a 0-minute countdown.
+    if sc and not (sc["reset"] and sc["reset"] <= now):
+        fields["fw"]  = sc["pct"]
+        fields["fwr"] = _mins(sc["reset"])
+        fields["fwn"] = sc["name"][:11]
+
+    if fields.get("st") in ("idle", "unavailable", "auth-error"):
+        se, wk = plan.get("session"), plan.get("weekly")
+        if se and wk:
+            fields.update({"s": se["pct"], "sr": max(0, _mins(se["reset"])),
+                           "w": wk["pct"], "wr": max(0, _mins(wk["reset"])),
+                           "st": "active"})
+
+
 def demo_payload() -> str:
     """Generate fake usage data for testing the UI (rate-limit + Today fields)."""
     import random
@@ -398,6 +518,7 @@ def demo_payload() -> str:
         "cw": round(random.uniform(5.0, 60.0), 2),
         "mo": opus, "ms": sonnet, "mh": haiku, "mf": fable,
         "mow": opus_w, "msw": sonnet_w, "mhw": haiku_w, "mfw": fable_w,
+        "fw": random.randint(5, 95), "fwr": wr, "fwn": "Fable",
         "ch": random.randint(40, 95),
         "tk": random.randint(50_000, 800_000),
         "se": random.randint(1, 12),
@@ -461,6 +582,7 @@ def force_refresh() -> None:
     _cp_cache["at"] = 0.0
     _cp_prem_cache["at"] = 0.0
     _ci_cache["at"] = 0.0
+    _plan_cache["at"] = 0.0
 
 # Snapshot of the last poll's "watch these for changes" counters. None means
 # "we haven't observed a baseline yet" — first run after a daemon restart
@@ -713,7 +835,8 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     """Decide which Argus expression to show on the splash and assemble the
     rotating event-text list below it. Priorities, highest-first:
 
-        angry      any cap >= 100% (Claude session / weekly / Copilot AI credits)
+        angry      any cap >= 100% (Claude session / weekly / model-scoped
+                   weekly e.g. Fable / Copilot AI credits)
         surprised  a new PR or issue arrived in the last hour
         buffeld    any cap >= 80%
         flirt      any cap >= 50%
@@ -729,6 +852,9 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     w   = float(fields.get("w")  or 0.0)
     sr  = int  (fields.get("sr") or -1)
     wr  = int  (fields.get("wr") or -1)
+    fw  = float(fields.get("fw")  or 0.0)   # model-scoped weekly (e.g. Fable)
+    fwr = int  (fields.get("fwr") or -1)
+    fwn = str  (fields.get("fwn") or "")
     cpu = int  (fields.get("cpu") or 0)
     cpa = int  (fields.get("cpa") or 0)
     cpp = float(fields.get("cpp") or 0.0)
@@ -737,7 +863,7 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     ge  = bool (fields.get("ge"))
     cpr = bool (fields.get("cpr"))
 
-    max_cap = max(s, w, cpp)
+    max_cap = max(s, w, fw, cpp)
 
     # ---- New-event detection -----------------------------------------
     # We can't see the per-item timestamps yet; "new" is defined as
@@ -787,6 +913,9 @@ def _mood_and_events(fields: dict) -> tuple[str, list[str]]:
     if w >= 50.0:
         r = _format_reset(wr)
         events.append(f"Claude weekly: {int(round(w))}%" + (f" - resets in {r}" if r else ""))
+    if fwn and fw >= 50.0:
+        r = _format_reset(fwr)
+        events.append(f"{fwn} weekly: {int(round(fw))}%" + (f" - resets in {r}" if r else ""))
     if s >= 50.0:
         r = _format_reset(sr)
         events.append(f"Claude session: {int(round(s))}%" + (f" - resets in {r}" if r else ""))
@@ -874,7 +1003,7 @@ def _changed_since_last(fields: dict) -> bool:
     screen starts on."""
     global _last_change_sig
     sig = (
-        fields.get("s"), fields.get("w"),                          # Claude caps
+        fields.get("s"), fields.get("w"), fields.get("fw"),        # Claude caps
         fields.get("gi"), fields.get("gp"),                        # GitHub issues / PRs
         fields.get("cps"), fields.get("cpu"),                      # Copilot status / credits used
         fields.get("cis"), fields.get("cif"), fields.get("ciq"),   # CI status / failing / waiting
@@ -896,6 +1025,11 @@ def build_payload(api_token: str) -> str:
     # used only as a fallback if the disk read fails).
     token = current_token(fallback=api_token)
     fields = poll_usage(token)
+    try:
+        _apply_plan_usage(fields, _plan_usage(token))
+    except Exception as e:
+        # The extra endpoint must never break the header-based caps.
+        log(f"Plan usage merge failed: {e}")
     try:
         agg = aggregate_today_stats()
         remote_hosts = cfg.get("remote_claude_hosts") or []
@@ -924,6 +1058,9 @@ def build_payload(api_token: str) -> str:
     fields["ps"]  = bool(cfg.get("power_save", False))
     fields["pst"] = max(300, poll + 60)
     fields["chg"] = _changed_since_last(fields)
+    # After this long without a payload the device flags its numbers as stale.
+    # Three missed polls, so one slow API call doesn't trip it.
+    fields["stl"] = max(180, 3 * poll + 30)
 
     # Desired BLE name. When a rename is pending we push the target so the device
     # adopts it; otherwise we keep asserting the current name (the firmware no-ops
@@ -996,6 +1133,31 @@ async def find_device(name: str | None = None):
         if d.name and d.name == target:
             log(f"Found: {d.name} [{d.address}]")
             return d
+    return _bluez_connected_device(target)
+
+
+def _bluez_connected_device(target: str):
+    """Linux only: find the device among those BlueZ already holds a connection
+    to. Argus exposes a HID service, so once it is paired BlueZ reconnects to it
+    on its own — and a connected peripheral stops advertising, which makes it
+    invisible to the scan above. bleak can still attach to that existing
+    connection when handed the device's BlueZ object path."""
+    if not sys.platform.startswith("linux"):
+        return None
+    import subprocess
+    try:
+        out = subprocess.run(["bluetoothctl", "devices", "Connected"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    for line in out.splitlines():
+        parts = line.split(" ", 2)
+        if len(parts) == 3 and parts[0] == "Device" and parts[2].strip() == target:
+            from bleak.backends.device import BLEDevice
+            addr = parts[1]
+            log(f"Found (already connected by the system): {target} [{addr}]")
+            path = "/org/bluez/hci0/dev_" + addr.replace(":", "_")
+            return BLEDevice(addr, target, {"path": path, "props": {}})
     return None
 
 def find_serial_port() -> str | None:
@@ -1074,14 +1236,49 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
             # USB-Serial-JTAG that edge fires USB_UART_CHIP_RESET — the board
             # reboots the moment we connect. Construct closed, clear the
             # control lines, then open. (Issue #19, cause 3.)
-            _ser = serial.Serial(None, baud, timeout=1, dsrdtr=False, rtscts=False)
-            _ser.port = port
-            _ser.dtr = False
-            _ser.rts = False
-            _ser.open()
+            # That holds on Windows; on Linux the same sequence is what causes
+            # the reset, so the OS-specific handling lives in open_no_reset().
+            _ser = usb_arbiter.open_no_reset(port, baud, timeout=1)
             with _ser as ser:
                 log(f"Serial open: {port}")
                 tray_ui.set_status("ok", f"USB — connected on {port}")
+                LINK.attach("usb")
+                rxbuf = bytearray()
+
+                def _pump() -> bool:
+                    """Service the command channel: read device lines, write
+                    queued commands, run a pending firmware update. Returns
+                    True when the link must be re-opened (device rebooted)."""
+                    n = ser.in_waiting
+                    if n:
+                        rxbuf.extend(ser.read(n))
+                        while b"\n" in rxbuf:
+                            raw, _, rest = bytes(rxbuf).partition(b"\n")
+                            rxbuf[:] = rest
+                            text = raw.decode("utf-8", "replace").strip()
+                            if text.startswith("!"):
+                                LINK.feed_line(text)
+                            elif text:
+                                log(f"Device: {text}")
+                    for out in LINK.pop_outgoing():
+                        ser.write((out + "\n").encode("utf-8"))
+                        ser.flush()
+                    job = LINK.take_ota()
+                    if job is None:
+                        return False
+                    tray_ui.set_status("warn", f"USB — updating firmware ({job.label})")
+                    try:
+                        device_link.ota_over_serial(ser, job, log)
+                        log("Firmware update complete — device is restarting")
+                        job.finish(True)
+                    except device_link.OtaError as e:
+                        log(f"Firmware update failed: {e}")
+                        job.finish(False, str(e))
+                        return False
+                    finally:
+                        LINK.ota_finished()
+                    return True
+
                 while True:
                     try:
                         payload = demo_payload() if demo_mode else build_payload(token)
@@ -1100,10 +1297,8 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                         # same whether the device parsed the line or never
                         # received it, which made this bug invisible.
                         time.sleep(0.05)
-                        if ser.in_waiting:
-                            reply = ser.read(ser.in_waiting).decode("utf-8", "replace").strip()
-                            if reply:
-                                log(f"Device: {reply}")
+                        if _pump():
+                            break   # firmware updated — device is rebooting
                         _commit_pending_rename()
                     except httpx.HTTPError as e:
                         log(f"API error: {e}")
@@ -1119,28 +1314,27 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
                     # most Windows USB stacks). poll_interval is re-read each
                     # cycle so saved changes take effect on the next send.
                     cur_interval = max(5, int(tray_ui.load_config().get("poll_interval", POLL_INTERVAL)))
-                    waited = 0
+                    deadline = time.monotonic() + cur_interval
                     disconnected = False
-                    while waited < cur_interval and not _should_stop():
-                        # wake_event.wait returns True immediately if Save
-                        # set it; otherwise blocks up to TICK seconds.
-                        if wake_event is not None and wake_event.wait(TICK):
+                    while time.monotonic() < deadline and not _should_stop():
+                        if wake_event is not None and wake_event.is_set():
                             wake_event.clear()
                             log("Wake — pushing payload now")
                             break
-                        elif wake_event is None:
-                            time.sleep(TICK)
-                        waited += TICK
                         if not ser.is_open:
                             disconnected = True
                             break
                         try:
-                            # Touching any property on a closed CDC raises OSError
-                            # on Windows. We use in_waiting as a cheap probe.
-                            _ = ser.in_waiting
+                            # Short slices so a permission prompt or its answer
+                            # crosses the link promptly. Touching in_waiting on a
+                            # closed CDC raises, which doubles as the unplug probe.
+                            if _pump():
+                                disconnected = True
+                                break
                         except (serial.SerialException, OSError):
                             disconnected = True
                             break
+                        time.sleep(0.1)
                     if _should_stop():
                         return
                     if disconnected:
@@ -1150,6 +1344,8 @@ def run_serial(port_or_auto: str, baud: int, demo_mode: bool, token,
         except (serial.SerialException, OSError) as e:
             log(f"Serial open failed: {e}")
             tray_ui.set_status("err", f"USB error: {e}")
+        finally:
+            LINK.detach()
         if _should_stop():
             return
         log(f"Reconnecting in {RECONNECT_DELAY}s...")
@@ -1185,19 +1381,42 @@ async def run_ble(demo_mode: bool, token,
 
     loop = asyncio.get_running_loop()
 
-    async def _wait_or_wake(timeout: float) -> bool:
-        """Sleep up to `timeout` seconds. Return True if wake_event fired
-        during the wait (and clear it), False otherwise."""
-        if wake_event is None:
-            await asyncio.sleep(timeout)
-            return False
-        # Run the threading.Event wait on the default executor so it doesn't
-        # block the asyncio loop. Cheap because the executor thread sleeps
-        # natively and is released on return.
-        fired = await loop.run_in_executor(None, wake_event.wait, timeout)
-        if fired:
-            wake_event.clear()
-        return fired
+    async def _ota_chunk_size(client) -> int:
+        """Largest safe firmware chunk for this link. BlueZ only reports the
+        negotiated MTU after an explicit acquire; if that isn't available fall
+        back to the conservative payload chunk size."""
+        try:
+            backend = getattr(client, "_backend", None)
+            if backend is not None and hasattr(backend, "_acquire_mtu"):
+                await backend._acquire_mtu()
+            mtu = int(client.mtu_size)
+        except Exception as e:
+            log(f"MTU lookup failed ({e!r}) — using small writes")
+            mtu = 0
+        return min(mtu - 3, 500) if mtu >= 100 else _BLE_CHUNK
+
+    async def _service_link(client, ota_lines) -> None:
+        """Write queued commands and run a pending firmware update."""
+        for out in LINK.pop_outgoing():
+            await _ble_write(client, out)
+        job = LINK.take_ota()
+        if job is None:
+            return
+        tray_ui.set_status("warn", f"BLE — updating firmware ({job.label})")
+        try:
+            chunk = await _ota_chunk_size(client)
+            log(f"Firmware update over BLE, {chunk} bytes per write")
+            await device_link.ota_over_ble(client, RX_CHAR_UUID, job, ota_lines, chunk, log)
+            log("Firmware update complete — device is restarting")
+            job.finish(True)
+        except device_link.OtaError as e:
+            log(f"Firmware update failed: {e}")
+            job.finish(False, str(e))
+        except Exception as e:
+            job.finish(False, str(e))
+            raise
+        finally:
+            LINK.ota_finished()
 
     fail_count = 0
     while not _should_stop():
@@ -1223,7 +1442,15 @@ async def run_ble(demo_mode: bool, token,
 
         # Connect and send data
         try:
-            async with BleakClient(device.address, timeout=15) as client:
+            # On Linux, pair as part of connecting. Argus carries a HID service
+            # and BlueZ will not finish service discovery or deliver
+            # notifications for it on an unbonded link — connects then time out
+            # or the notification subscribe hangs. (Measured on a Pi: unpaired,
+            # discovery stalled for 45 s+; paired, it resolved at once.) Other
+            # platforms pair on demand and are left as they were.
+            on_linux = sys.platform.startswith("linux")
+            async with BleakClient(device, timeout=30 if on_linux else 15,
+                                   pair=on_linux) as client:
                 log(f"Connected to {device.address}")
                 tray_ui.set_status("ok", f"BLE — connected to {device.address}")
                 if probe_default:
@@ -1236,6 +1463,28 @@ async def run_ble(demo_mode: bool, token,
                     log(f"  Service: {svc.uuid}")
                     for char in svc.characteristics:
                         log(f"    Char: {char.uuid} props={char.properties}")
+
+                # Device -> daemon command lines arrive as TX notifications.
+                ota_lines: asyncio.Queue = asyncio.Queue()
+
+                def _on_tx(_char, data: bytearray):
+                    for text in bytes(data).decode("utf-8", "replace").splitlines():
+                        text = text.strip()
+                        if not text.startswith("!"):
+                            continue      # {"ack":true} etc.
+                        LINK.feed_line(text)
+                        if text.startswith("!ota"):
+                            loop.call_soon_threadsafe(ota_lines.put_nowait, text)
+
+                # Bounded: usage payloads must keep flowing even if the
+                # subscribe stalls (seen on BlueZ with an unpaired device).
+                try:
+                    await asyncio.wait_for(
+                        client.start_notify(TX_CHAR_UUID, _on_tx), timeout=8)
+                    LINK.attach("ble")
+                except Exception as e:
+                    log(f"TX notifications unavailable ({e!r}) — device prompts "
+                        f"and firmware updates are off for this connection")
 
                 while client.is_connected:
                     try:
@@ -1254,23 +1503,26 @@ async def run_ble(demo_mode: bool, token,
                         log(f"Write error: {e}")
                         break
 
-                    # Chunked wait: sleep TICK seconds at a time and bail out
-                    # the moment bleak reports a disconnect, instead of holding
-                    # the full interval before noticing. _wait_or_wake also cuts
-                    # the wait short when the tray's Save button fires.
+                    # Chunked wait: bail out the moment bleak reports a
+                    # disconnect, instead of holding the full interval before
+                    # noticing; the tray's Save button (wake_event) also cuts
+                    # the wait short.
                     # poll_interval is re-read each cycle so saved changes
                     # take effect on the next send.
                     cur_interval = max(5, int(tray_ui.load_config().get("poll_interval", POLL_INTERVAL)))
-                    waited = 0
-                    while waited < cur_interval and not _should_stop():
-                        woke = await _wait_or_wake(TICK)
-                        waited += TICK
-                        if woke:
+                    deadline = time.monotonic() + cur_interval
+                    while time.monotonic() < deadline and not _should_stop():
+                        if wake_event is not None and wake_event.is_set():
+                            wake_event.clear()
                             log("Wake — pushing payload now")
                             break
                         if not client.is_connected:
                             log("BLE link dropped — exiting poll loop to reconnect")
                             break
+                        # Short slices so a permission prompt or its answer
+                        # crosses the link promptly.
+                        await _service_link(client, ota_lines)
+                        await asyncio.sleep(0.2)
                     if _should_stop():
                         return
 
@@ -1278,6 +1530,8 @@ async def run_ble(demo_mode: bool, token,
             fail_count = 0 if probe_default else fail_count + 1
             log(f"BLE error: {e}")
             tray_ui.set_status("err", f"BLE error: {e}")
+        finally:
+            LINK.detach()
 
         if _should_stop():
             return
@@ -1298,6 +1552,11 @@ def parse_args():
                    help="Serial baud rate (default 115200, must match firmware).")
     p.add_argument("--demo", action="store_true",
                    help="Send randomized fake data instead of polling Anthropic API.")
+    p.add_argument("--ota", nargs="?", const="latest", metavar="FILE",
+                   help="Update the device firmware over the current link, then "
+                        "exit. Pass a local .bin (PlatformIO's firmware.bin or "
+                        "the merged flasher image), or nothing to install the "
+                        "published build. Implies --headless.")
     p.add_argument("--headless", action="store_true",
                    help="Skip the tray icon / settings window. Useful for systemd "
                         "services or remote shells with no display.")
@@ -1368,9 +1627,11 @@ if __name__ == "__main__":
     cfg0 = tray_ui.load_config()
     store = SessionStore(log=log)
     klar_enabled = bool(cfg0.get("klar_lamp_enabled", True))
-    if klar_enabled:
+    # The hook listener serves both the lamp (session state) and Argus
+    # (permission prompts), so it runs whenever either wants it.
+    if klar_enabled or cfg0.get("device_prompts", True):
         hook_port = int(cfg0.get("klar_hook_port", DEFAULT_HOOK_PORT) or DEFAULT_HOOK_PORT)
-        start_hook_listener(store, hook_port, log=log)
+        start_hook_listener(store, hook_port, log=log, responder=permission_responder)
 
     run_ctx = RunContext(args=args, token=token, stop_event=stop_event,
                          wake_event=wake_event, reload_event=reload_event,
@@ -1379,6 +1640,33 @@ if __name__ == "__main__":
     if klar_enabled:
         outputs.append(KlarLampOutput())
     manager = OutputManager(outputs, run_ctx)
+
+    def _update_firmware(source: str = "latest") -> bool:
+        """Run one firmware update to completion; logs the outcome."""
+        try:
+            job = start_firmware_update(source)
+        except (device_link.OtaError, firmware_update.FirmwareError) as e:
+            log(f"Firmware update not started: {e}")
+            tray_ui.set_status("err", f"Firmware update: {e}")
+            return False
+        if job is None:
+            return True
+        job.done.wait(1800)
+        if not job.ok:
+            tray_ui.set_status("err", f"Firmware update failed: {job.error or 'timed out'}")
+        return job.ok
+
+    if args.ota:
+        # One-shot: bring the link up, push the image, exit.
+        threading.Thread(target=manager.run, name="argus-worker", daemon=True).start()
+        waited = 0.0
+        while not LINK.ready and waited < 90:
+            time.sleep(0.5)
+            waited += 0.5
+        ok = _update_firmware(args.ota)
+        stop_event.set()
+        time.sleep(3.0)    # let the transport close its link cleanly
+        sys.exit(0 if ok else 1)
 
     if args.headless:
         # Worker (output threads) started by the manager; Ctrl-C to quit.
@@ -1421,7 +1709,12 @@ if __name__ == "__main__":
         )
         worker.start()
 
-        had_tray = tray_ui.run_tray(on_save=_on_save, stop_event=stop_event)
+        def _on_update():
+            threading.Thread(target=_update_firmware, name="argus-ota",
+                             daemon=True).start()
+
+        had_tray = tray_ui.run_tray(on_save=_on_save, stop_event=stop_event,
+                                    on_update=_on_update)
         if not had_tray:
             log("Tray unavailable — falling back to headless mode.")
             try:
