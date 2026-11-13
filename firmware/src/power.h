@@ -10,3 +10,7 @@ bool power_pwr_pressed(void);    // true once per AXP2101 PWR button short-press
 // AXP2101 DLDO1 rail (not a GPIO), so power-save toggles it via the PMU.
 // No-op if the PMU wasn't found.
 void power_set_backlight(bool on);
+
+// Fill `out` with a one-line PMU diagnostic (last power-off cause + voltages).
+#include <stddef.h>
+void power_diag(char* out, size_t len);

@@ -118,6 +118,12 @@ jobs:
 
       - name: Build firmware (ESP32-S3)
         run: |
+          # Build id baked into the Argus firmware (reported to the daemon as
+          # `!ver`) and written to version.json below, so the daemon can tell
+          # when the published build differs from what a device is running.
+          VERSION="$(date -u +%-m.%-d).${GITHUB_SHA::7}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          export ARGUS_FW_VERSION="$VERSION"
           pio run -d firmware        # Argus device
           pio run -d firmware-klar   # Klar-lampan (LilyGO T-Dongle S3)
 
@@ -151,6 +157,12 @@ jobs:
             0xe000   "$BOOT_APP0" \
             0x10000  "$S3_DIR/firmware.bin"
 
+          # App-only image for updates over the daemon link (BLE/USB). The
+          # merged image above is for a first flash by cable; this one is what
+          # `argus-daemon --ota` / the tray's "Update device firmware" installs.
+          cp "$S3_DIR/firmware.bin" site/firmware/argus-ota.bin
+          OTA_MD5=$(md5sum site/firmware/argus-ota.bin | cut -d' ' -f1)
+
           # Klar-lampan (LilyGO T-Dongle S3, 4MB flash) — same single-image merge.
           KLAR_DIR=firmware-klar/.pio/build/t_dongle_s3
           python -m esptool --chip esp32s3 merge_bin \
@@ -169,7 +181,6 @@ jobs:
           cp daemon-artifacts/argus-daemon-linux       site/daemon/
           chmod +x site/daemon/argus-daemon-macos site/daemon/argus-daemon-linux
 
-          VERSION="$(date -u +%-m.%-d).${GITHUB_SHA::7}"
           echo "Version: $VERSION"
 
           jq --arg v "$VERSION" '.version = $v' site/manifest.json > site/manifest.json.tmp
@@ -178,7 +189,7 @@ jobs:
           jq --arg v "$VERSION" '.version = $v' site/manifest-klar.json > site/manifest-klar.json.tmp
           mv site/manifest-klar.json.tmp site/manifest-klar.json
 
-          echo "{\"build\":\"$VERSION\",\"sha\":\"${GITHUB_SHA::7}\",\"date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > site/version.json
+          echo "{\"build\":\"$VERSION\",\"sha\":\"${GITHUB_SHA::7}\",\"date\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"ota\":\"firmware/argus-ota.bin\",\"ota_md5\":\"$OTA_MD5\"}" > site/version.json
 
       - uses: actions/configure-pages@v5
 

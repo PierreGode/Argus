@@ -39,6 +39,7 @@ Override the port with the `KLAR_HOOK_PORT` env var.
 | `UserPromptSubmit` | `work` | blue |
 | `PreToolUse` (and `PostToolUse`) | `work` (refresh activity) | blue |
 | `Notification` | `wait` — needs me | **yellow (most eye-catching)** |
+| `PermissionRequest` *(optional)* | `wait` — needs me | **yellow** |
 | `Stop` | `done` (fires one-shot fanfare) | green |
 | `SessionEnd` | `rest` | off |
 | *(idle timeout / long-press ack)* | `done`/`work` → `rest` | off |
@@ -46,6 +47,18 @@ Override the port with the `KLAR_HOOK_PORT` env var.
 The daemon keys state by `session_id`, reads `cwd` for the repo name, and reads
 the tail of `transcript_path` (same `.jsonl` format `claude_logs.py` parses) for
 last-response tokens, cumulative session cost, and a context-fill estimate.
+
+### Permission requests (two-way, for the Argus device)
+
+`PermissionRequest` is the one event the daemon **answers**. After forwarding
+the event line, `klar_hook.py` keeps the connection open and waits for one line
+back, `{"decision": "allow" | "deny" | ""}`. The daemon shows the request on a
+connected Argus (Deny / Skip / Allow) and returns the tap; an empty decision —
+skipped, timed out (`prompt_timeout`, default 30 s), no device, feature off —
+makes the hook print nothing, so Claude Code asks in the terminal as usual. If
+the hook process goes away first, the daemon withdraws the prompt from the
+device. Give this hook a `"timeout"` above the script's own 125 s cap; the
+sample uses 130.
 
 ### Minimal `settings.json`
 
