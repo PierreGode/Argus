@@ -9,6 +9,15 @@ sends JSON to the ESP32 "Argus Controller" over either:
 Dependencies: pip install bleak httpx pyserial PySide6
 """
 
+import sys
+
+# Hook mode: Claude Code launches the app as `argus-daemon --hook` for each
+# permission prompt (see hook_install.py). Handle it before the heavy imports
+# so it starts fast, and never fall through into the daemon itself.
+if __name__ == "__main__" and "--hook" in sys.argv[1:]:
+    import klar_hook
+    sys.exit(klar_hook.main())
+
 import argparse
 import asyncio
 import json
@@ -30,6 +39,7 @@ import ci_stats
 import plan_usage
 import device_link
 import firmware_update
+import hook_install
 import tray_ui
 from version import __version__
 
@@ -1557,6 +1567,12 @@ def parse_args():
                         "exit. Pass a local .bin (PlatformIO's firmware.bin or "
                         "the merged flasher image), or nothing to install the "
                         "published build. Implies --headless.")
+    p.add_argument("--install-hooks", action="store_true",
+                   help="Add the Argus permission-prompt hook to Claude Code's "
+                        "~/.claude/settings.json, then exit.")
+    p.add_argument("--hook", action="store_true",
+                   help="Internal: act as the Claude Code hook (reads the hook "
+                        "JSON on stdin). Installed by --install-hooks.")
     p.add_argument("--headless", action="store_true",
                    help="Skip the tray icon / settings window. Useful for systemd "
                         "services or remote shells with no display.")
@@ -1607,6 +1623,14 @@ def run_worker(args, token, stop_event: threading.Event,
 
 if __name__ == "__main__":
     args = parse_args()
+    if args.install_hooks:
+        try:
+            print(f"Installed Claude Code hook: {hook_install.install()}")
+            print("Restart Claude Code sessions to pick it up.")
+            sys.exit(0)
+        except hook_install.HookInstallError as e:
+            print(f"Hook install failed: {e}")
+            sys.exit(1)
     log("=== Argus daemon ===")
     log(f"Config: {tray_ui.config_path()}")
 
@@ -1616,6 +1640,11 @@ if __name__ == "__main__":
     else:
         token = read_token()
         log("Token loaded OK")
+
+    if tray_ui.load_config().get("device_prompts", True) and not hook_install.is_installed():
+        log("Claude Code hook not installed — permission prompts won't reach the "
+            "device. Use the tray menu's \"Install Claude Code hook\" or run "
+            "with --install-hooks.")
 
     stop_event = threading.Event()
     wake_event = threading.Event()
@@ -1713,8 +1742,17 @@ if __name__ == "__main__":
             threading.Thread(target=_update_firmware, name="argus-ota",
                              daemon=True).start()
 
+        def _on_install_hook():
+            try:
+                cmd = hook_install.install()
+                log(f"Claude Code hook installed: {cmd}")
+                log("Restart running Claude Code sessions to pick it up.")
+            except hook_install.HookInstallError as e:
+                log(f"Hook install failed: {e}")
+
         had_tray = tray_ui.run_tray(on_save=_on_save, stop_event=stop_event,
-                                    on_update=_on_update)
+                                    on_update=_on_update,
+                                    on_install_hook=_on_install_hook)
         if not had_tray:
             log("Tray unavailable — falling back to headless mode.")
             try:

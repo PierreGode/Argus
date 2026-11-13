@@ -586,7 +586,8 @@ def _make_app_icon():
 # ----- Qt main window -------------------------------------------------------
 
 def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
-            on_update: Callable[[], None] | None = None) -> bool:
+            on_update: Callable[[], None] | None = None,
+            on_install_hook: Callable[[], None] | None = None) -> bool:
     from PySide6.QtCore import Qt, QTimer
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import (
@@ -1187,6 +1188,12 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
         act_update = QAction("Update device firmware", menu)
         act_update.triggered.connect(lambda _checked=False: on_update())
         menu.addAction(act_update)
+    if on_install_hook is not None:
+        # Writes the PermissionRequest hook into ~/.claude/settings.json so
+        # Claude Code's permission prompts show up on the device.
+        act_hook = QAction("Install Claude Code hook", menu)
+        act_hook.triggered.connect(lambda _checked=False: on_install_hook())
+        menu.addAction(act_hook)
     menu.addSeparator()
     menu.addAction(act_quit)
     tray.setContextMenu(menu)
@@ -1203,7 +1210,8 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
 
 
 def run_tray(on_save: Callable[[dict], None], stop_event: threading.Event,
-             on_update: Callable[[], None] | None = None) -> bool:
+             on_update: Callable[[], None] | None = None,
+             on_install_hook: Callable[[], None] | None = None) -> bool:
     """Block the calling thread on the Qt event loop.
 
     Returns False immediately if PySide6 can't be imported or no system tray
@@ -1221,7 +1229,7 @@ def run_tray(on_save: Callable[[dict], None], stop_event: threading.Event,
         return False
 
     try:
-        return _run_qt(on_save, stop_event, on_update)
+        return _run_qt(on_save, stop_event, on_update, on_install_hook)
     except Exception as e:
         print(f"[tray] Qt failed to start: {e}", flush=True)
         return False

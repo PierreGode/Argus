@@ -88,7 +88,7 @@ a = Analysis(
     binaries=[],
     datas=datas,
     hiddenimports=[
-        "claude_logs", "plan_usage", "device_link", "firmware_update", "github_stats", "copilot_stats",
+        "claude_logs", "plan_usage", "device_link", "firmware_update", "klar_hook", "hook_install", "github_stats", "copilot_stats",
         "tray_ui", "token_crypt", "version",
     ],
     hookspath=[],
