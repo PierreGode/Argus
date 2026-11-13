@@ -11,9 +11,11 @@ void overlay_tick(void);
 
 // ---- Permission prompt ----
 // Shows the tool + what it wants to do with Deny / Skip / Allow buttons.
-// "Skip" hands the question back to the terminal.
+// "Skip" hands the question back to the terminal. `project` is the repo the
+// asking session is in and `branch` its branch (either may be ""), so prompts
+// from several sessions can be told apart.
 void prompt_show(const char* id, const char* tool, const char* detail,
-                 const char* project, int timeout_s);
+                 const char* project, const char* branch, int timeout_s);
 void prompt_cancel(const char* id);     // id NULL/"" cancels whatever is showing
 bool prompt_active(void);
 void prompt_skip(void);                 // BOOT button while a prompt is up

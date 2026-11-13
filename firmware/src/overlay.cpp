@@ -18,6 +18,7 @@ LV_FONT_DECLARE(font_styrene_20);
 // ---------- permission prompt ----------
 static lv_obj_t* pr_root;
 static lv_obj_t* pr_project;
+static lv_obj_t* pr_branch;
 static lv_obj_t* pr_tool;
 static lv_obj_t* pr_detail;
 static lv_obj_t* pr_bar;
@@ -114,11 +115,20 @@ void overlay_init(void) {
     lv_obj_t* title = make_label(pr_root, &font_tiempos_34, THEME_TEXT, "Allow this?");
     lv_obj_set_pos(title, 24, 22);
 
-    pr_project = make_label(pr_root, &font_styrene_20, THEME_DIM, "");
-    lv_obj_set_width(pr_project, 200);
+    // Which session is asking: the repo, in the accent colour so it is the
+    // first thing read when several sessions are running, with its branch
+    // underneath on the tool row.
+    pr_project = make_label(pr_root, &font_styrene_24, THEME_ACCENT, "");
+    lv_obj_set_size(pr_project, 232, 30);             // one line; overflow ends in "..."
     lv_label_set_long_mode(pr_project, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(pr_project, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(pr_project, LV_ALIGN_TOP_RIGHT, -24, 34);
+    lv_obj_align(pr_project, LV_ALIGN_TOP_RIGHT, -24, 30);
+
+    pr_branch = make_label(pr_root, &font_styrene_20, THEME_DIM, "");
+    lv_obj_set_size(pr_branch, 250, 26);
+    lv_label_set_long_mode(pr_branch, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(pr_branch, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(pr_branch, LV_ALIGN_TOP_RIGHT, -24, 82);
 
     pr_tool = make_label(pr_root, &font_styrene_24, THEME_TEXT, "");
     lv_obj_set_style_bg_color(pr_tool, THEME_BAR_BG, 0);
@@ -189,12 +199,18 @@ void overlay_tick(void) {
 }
 
 void prompt_show(const char* id, const char* tool, const char* detail,
-                 const char* project, int timeout_s) {
+                 const char* project, const char* branch, int timeout_s) {
     if (timeout_s < 3) timeout_s = 3;
     strlcpy(pr_id, id ? id : "", sizeof(pr_id));
     lv_label_set_text(pr_tool, (tool && tool[0]) ? tool : "Tool");
     lv_label_set_text(pr_detail, detail ? detail : "");
     lv_label_set_text(pr_project, project ? project : "");
+    lv_label_set_text(pr_branch, branch ? branch : "");
+    // The branch shares its row with the tool pill. A long tool name (MCP
+    // tools) needs that room more, so the branch gives way to it.
+    lv_obj_update_layout(pr_tool);
+    if (lv_obj_get_width(pr_tool) > 180) lv_obj_add_flag(pr_branch, LV_OBJ_FLAG_HIDDEN);
+    else                                 lv_obj_clear_flag(pr_branch, LV_OBJ_FLAG_HIDDEN);
     lv_bar_set_value(pr_bar, 1000, LV_ANIM_OFF);
     pr_timeout_ms = (uint32_t)timeout_s * 1000UL;
     pr_shown_ms = millis();

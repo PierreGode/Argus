@@ -6,7 +6,7 @@ and on both transports (USB serial lines / BLE: written to RX, notified on TX):
 
     daemon -> device                      device -> daemon
     !ver                                  !ver <build id>
-    !pr {"id","t","d","p","to"}           !pr <id> allow|deny|skip
+    !pr {"id","t","d","p","b","to"}       !pr <id> allow|deny|skip
     !prx <id>                             (prompt withdrawn)
     !ota <size> <md5>                     !ota ready <block> | !ota err <why>
     <raw image bytes>                     !ota ack <received>   (USB only)
@@ -202,9 +202,59 @@ def _clean(text: str, limit: int) -> str:
     return text
 
 
+def _short(text: str, limit: int) -> str:
+    """Like _clean, for names: cut without the "(+N more)" marker — the device
+    ends an over-long name in "..." itself."""
+    text = re.sub(r"\s+", " ", str(text)).strip()
+    return "".join(c if 32 <= ord(c) < 127 else "?" for c in text)[:limit]
+
+
+def _head_branch(git_dir: Path) -> str:
+    """Branch checked out in a git dir, or "@<short sha>" on a detached HEAD."""
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        return ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    return "@" + head[:7] if head else ""
+
+
+def git_info(cwd: str) -> tuple[str, str]:
+    """(repo name, branch) for the session's working directory, so prompts from
+    several sessions can be told apart. Reads .git directly — no git process
+    per prompt. A linked worktree reports its main repository's name (the
+    worktree folder is often a throwaway name) with its own branch. ("", "")
+    outside a repo."""
+    if not cwd:
+        return "", ""
+    try:
+        start = Path(cwd)
+        for d in (start, *start.parents):
+            g = d / ".git"
+            if g.is_dir():
+                return d.name, _head_branch(g)
+            if g.is_file():
+                txt = g.read_text(encoding="utf-8", errors="replace").strip()
+                if not txt.startswith("gitdir:"):
+                    return d.name, ""
+                gd = Path(txt[len("gitdir:"):].strip())
+                if not gd.is_absolute():
+                    gd = d / gd
+                name = d.name
+                if gd.parent.name == "worktrees" and gd.parent.parent.name == ".git":
+                    name = gd.parent.parent.parent.name
+                return name, _head_branch(gd)
+    except OSError:
+        pass
+    return "", ""
+
+
 def prompt_info(evt: dict) -> dict:
     """Reduce a PermissionRequest hook event to what fits on the device:
-    t = tool name, d = what it wants to do, p = project (cwd basename)."""
+    t = tool name, d = what it wants to do, p = repo (or the folder name when
+    the session isn't in a git repo), b = branch."""
     tool = str(evt.get("tool_name") or "Tool")
     ti = evt.get("tool_input")
     if not isinstance(ti, dict):
@@ -224,11 +274,15 @@ def prompt_info(evt: dict) -> dict:
     else:
         detail = "(no details)"
     cwd = evt.get("cwd") or ""
-    return {
+    repo, branch = git_info(cwd)
+    info = {
         "t": _clean(tool, 36),
         "d": _clean(detail, _DETAIL_MAX),
-        "p": _clean(Path(cwd).name if cwd else "", 28),
+        "p": _short(repo or (Path(cwd).name if cwd else ""), 28),
     }
+    if branch:
+        info["b"] = _short(branch, 40)
+    return info
 
 
 # ---- firmware transfer -------------------------------------------------------
