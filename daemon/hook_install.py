@@ -65,6 +65,50 @@ def is_installed(path: Path | None = None) -> bool:
         return False
 
 
+def claude_code_present() -> bool:
+    """True when this user has a Claude Code config folder. Automatic setup
+    only runs then, so Argus never creates ~/.claude for someone who doesn't
+    use Claude Code."""
+    return settings_path().parent.is_dir()
+
+
+def _command_target_exists(cmd: str) -> bool:
+    """Does the program a hook command starts still exist? Our commands begin
+    with a quoted path; anything else (a bare `python ...`) is taken on trust."""
+    if not cmd.startswith('"'):
+        return True
+    end = cmd.find('"', 1)
+    if end < 0:
+        return True
+    try:
+        return Path(cmd[1:end]).exists()
+    except OSError:
+        return True
+
+
+def status(path: Path | None = None) -> str:
+    """"ok" - our hook is installed and its program exists;
+    "stale" - installed, but it points at a program that is gone (the app was
+    moved or reinstalled elsewhere), so prompts silently skip the device;
+    "missing" - not installed."""
+    path = path or settings_path()
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+        entries = (d.get("hooks") or {}).get(EVENT) or []
+    except (OSError, ValueError, AttributeError):
+        return "missing"
+    found = False
+    for e in entries:
+        if not _is_ours(e):
+            continue
+        found = True
+        for h in e.get("hooks") or []:
+            cmd = str(h.get("command") or "") if isinstance(h, dict) else ""
+            if any(m in cmd for m in _MARKERS) and _command_target_exists(cmd):
+                return "ok"
+    return "stale" if found else "missing"
+
+
 def install(path: Path | None = None) -> str:
     """Add / refresh the hook. Returns the command that was written."""
     path = path or settings_path()
