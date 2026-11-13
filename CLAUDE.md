@@ -96,7 +96,7 @@ The primary daemon is **`daemon/argus-daemon.py`** — a cross-platform PySide6 
 - **Firmware update** — `--ota [FILE]` or the tray menu → `start_firmware_update()` → `!ota <size> <md5>` then raw bytes (USB: 1024-byte blocks each acked; BLE: write-with-response chunks to RX, which the firmware only acknowledges once flashed). Published builds come from `version.json` + `firmware/argus-ota.bin` on the Pages site (`firmware_update.py`).
 - **Stale pill** — firmware-side only, driven by the `stl` payload key.
 
-To QA the prompt overlay without a Claude session, send a `!pr {"id":"t1","t":"Bash","d":"...","p":"Argus","to":25}` line over serial and screenshot.
+To QA the prompt overlay without a Claude session, send a `!pr {"id":"t1","t":"Bash","d":"...","p":"Argus","b":"main","to":25}` line (`p` = repo, `b` = branch — `git_info()` in `device_link.py`) over serial and screenshot.
 
 **Discovery & resilience:** connects by name (`"Argus Controller"`), caches the resolved MAC, and on connect failure drops the cache (and removes the device from bluez on Linux) so the next scan won't re-pick a dead MAC. ESP32 BLE addresses are factory-burned per-chip, so swapping any board invalidates the cache. The inner loop wakes every ~5s to detect disconnects fast and polls when the interval elapses OR when the ESP fires a refresh request.
 

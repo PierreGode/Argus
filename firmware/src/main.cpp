@@ -309,7 +309,8 @@ static void handle_command(const char* line, bool from_ble) {
         if (deserializeJson(doc, line + 4)) return;
         const char* id = doc["id"] | "";
         if (!id[0] || ota_active()) return;
-        prompt_show(id, doc["t"] | "", doc["d"] | "", doc["p"] | "", doc["to"] | 30);
+        prompt_show(id, doc["t"] | "", doc["d"] | "", doc["p"] | "",
+                    doc["b"] | "", doc["to"] | 30);
         note_activity();   // wake a blanked screen — someone is waiting on us
     }
 }
