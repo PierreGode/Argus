@@ -1621,6 +1621,49 @@ def run_worker(args, token, stop_event: threading.Event,
         return
 
 
+def _mark_hook_setup_done() -> None:
+    cfg = tray_ui.load_config()
+    if not cfg.get("hook_setup_done"):
+        cfg["hook_setup_done"] = True
+        try:
+            tray_ui.save_config(cfg)
+        except OSError as e:
+            log(f"Couldn't save config: {e}")
+
+
+def ensure_claude_hook() -> None:
+    """Set the Claude Code hook up without being asked, so permission prompts
+    reach the device straight after install. Runs on every start, per user —
+    the MSI is per-machine and elevated, so it can't know whose ~/.claude to
+    write. Does it once: a hook the user later removes stays removed. A hook
+    that points at a program that no longer exists is repaired every time."""
+    if not tray_ui.load_config().get("device_prompts", True):
+        return
+    st = hook_install.status()
+    if st == "ok":
+        _mark_hook_setup_done()
+        return
+    manual = ("Use Set up on the Claude tab, the tray menu's \"Install Claude "
+              "Code hook\", or run with --install-hooks.")
+    if st == "missing":
+        if tray_ui.load_config().get("hook_setup_done"):
+            log("Claude Code hook was removed — permission prompts won't reach "
+                f"the device. {manual}")
+            return
+        if not hook_install.claude_code_present():
+            log("Claude Code not found (no ~/.claude folder) — skipping the "
+                f"permission-prompt hook. {manual}")
+            return
+    try:
+        cmd = hook_install.install()
+    except hook_install.HookInstallError as e:
+        log(f"Claude Code hook setup failed: {e}. {manual}")
+        return
+    _mark_hook_setup_done()
+    log(f"Claude Code hook {'repaired' if st == 'stale' else 'set up'}: {cmd}")
+    log("Restart running Claude Code sessions to pick it up.")
+
+
 if __name__ == "__main__":
     args = parse_args()
     if args.install_hooks:
@@ -1641,10 +1684,7 @@ if __name__ == "__main__":
         token = read_token()
         log("Token loaded OK")
 
-    if tray_ui.load_config().get("device_prompts", True) and not hook_install.is_installed():
-        log("Claude Code hook not installed — permission prompts won't reach the "
-            "device. Use the tray menu's \"Install Claude Code hook\" or run "
-            "with --install-hooks.")
+    ensure_claude_hook()
 
     stop_event = threading.Event()
     wake_event = threading.Event()
@@ -1745,6 +1785,7 @@ if __name__ == "__main__":
         def _on_install_hook():
             try:
                 cmd = hook_install.install()
+                _mark_hook_setup_done()
                 log(f"Claude Code hook installed: {cmd}")
                 log("Restart running Claude Code sessions to pick it up.")
             except hook_install.HookInstallError as e:

@@ -25,6 +25,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
+import hook_install  # local module: Claude Code hook status for the Claude tab
 import token_crypt  # local module: DPAPI wrapper for the GitHub PAT
 
 
@@ -101,6 +102,7 @@ DEFAULTS = {
     "klar_hook_port": 47600,   # loopback TCP port the Claude Code hooks send session events to
     "device_prompts": True,    # answer Claude Code permission prompts on the Argus device (needs the PermissionRequest hook)
     "prompt_timeout": 30,      # seconds a prompt waits on the device before falling back to the terminal
+    "hook_setup_done": False,  # the Claude Code hook was set up once; if the user removes it later, don't put it back uninvited
     "firmware_url": "https://pierregode.github.io/Argus/",  # site whose version.json names the published firmware
 }
 
@@ -935,8 +937,58 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
             remote.setLayout(rv)
             v.addWidget(remote)
 
+            # Claude Code permission prompts on the device. Needs a hook in
+            # ~/.claude/settings.json; the app sets it up on first start, and
+            # this row shows whether it is there and repairs it on request.
+            prompts = QGroupBox("PERMISSION PROMPTS ON DEVICE")
+            pv = QVBoxLayout()
+            pv.setSpacing(8)
+            self.chk_device_prompts = QCheckBox(
+                "Show Claude Code permission prompts on the device")
+            self.chk_device_prompts.setChecked(bool(cfg.get("device_prompts", True)))
+            pv.addWidget(self.chk_device_prompts)
+            hook_row = QHBoxLayout()
+            hook_row.setSpacing(12)
+            self.lbl_hook_status = QLabel("")
+            self.lbl_hook_status.setWordWrap(True)
+            hook_row.addWidget(self.lbl_hook_status, 1)
+            self.btn_hook_setup = QPushButton("Set up")
+            self.btn_hook_setup.clicked.connect(self._on_hook_setup_clicked)
+            self.btn_hook_setup.setEnabled(on_install_hook is not None)
+            hook_row.addWidget(self.btn_hook_setup)
+            pv.addLayout(hook_row)
+            prompts_hint = QLabel(
+                "Allow / Deny / Skip appear on the device whenever Claude Code "
+                "asks for permission. Sessions in auto or bypass mode never "
+                "ask, so they show nothing. Restart running Claude Code "
+                "sessions after setting this up."
+            )
+            prompts_hint.setObjectName("muted")
+            prompts_hint.setWordWrap(True)
+            pv.addWidget(prompts_hint)
+            prompts.setLayout(pv)
+            v.addWidget(prompts)
+            self._refresh_hook_status()
+
             v.addStretch()
             return page
+
+        def _refresh_hook_status(self):
+            st = hook_install.status()
+            text, color, button = {
+                "ok":      ("Claude Code hook: set up", OK_GREEN, "Reinstall"),
+                "stale":   ("Claude Code hook: points at a missing program",
+                            AMBER, "Repair"),
+                "missing": ("Claude Code hook: not set up", AMBER, "Set up"),
+            }[st]
+            self.lbl_hook_status.setText(text)
+            self.lbl_hook_status.setStyleSheet(f"color: {color}; font-weight: 600;")
+            self.btn_hook_setup.setText(button)
+
+        def _on_hook_setup_clicked(self):
+            if on_install_hook is not None:
+                on_install_hook()
+            self._refresh_hook_status()
 
         def _build_github_tab(self, cfg: dict) -> QWidget:
             page = QWidget()
@@ -1117,7 +1169,12 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
             typed = self.ed_name.text().strip() or "Argus Controller"
             pending_name = "" if typed == current_name else typed
 
-            new_cfg = {
+            # Start from the saved config: settings without a control here
+            # (prompt_timeout, klar_*, firmware_url, hook_setup_done) used to
+            # be reset to their defaults on every Save.
+            new_cfg = dict(prev)
+            new_cfg.update({
+                "device_prompts":     self.chk_device_prompts.isChecked(),
                 "github_token":       self.ed_token.text().strip(),
                 "copilot_org":        self.ed_copilot_org.text().strip(),
                 "copilot_enterprise": self.ed_copilot_enterprise.text().strip(),
@@ -1137,7 +1194,7 @@ def _run_qt(on_save: Callable[[dict], None], stop_event: threading.Event,
                 "ci_focus_fail":      self.chk_ci_focus_fail.isChecked(),
                 "ci_focus_action":    self.chk_ci_focus_action.isChecked(),
                 "ci_focus_success":   self.chk_ci_focus_success.isChecked(),
-            }
+            })
             save_config(new_cfg)
             if pending_name and pending_name != prev_pending:
                 self.log_view.appendPlainText(
