@@ -50,11 +50,57 @@ def _permission_output(decision: str) -> str:
         "hookEventName": "PermissionRequest", "decision": d}})
 
 
-def main() -> int:
+def _read_stdin() -> str:
+    """Hook JSON from stdin. The packaged Windows app is a windowed program, so
+    Python's sys.stdin/stdout can be None even though Claude Code handed us
+    pipes — fall back to the raw Win32 standard handles in that case."""
+    if sys.stdin is not None:
+        try:
+            return sys.stdin.read()
+        except Exception:
+            pass
+    if os.name != "nt":
+        return ""
     try:
-        raw = sys.stdin.read()
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.GetStdHandle.restype = wintypes.HANDLE
+        h = k32.GetStdHandle(-10)          # STD_INPUT_HANDLE
+        data = b""
+        buf = ctypes.create_string_buffer(65536)
+        n = wintypes.DWORD(0)
+        while k32.ReadFile(wintypes.HANDLE(h), buf, len(buf), ctypes.byref(n), None) and n.value:
+            data += buf.raw[:n.value]
+        return data.decode("utf-8", "replace")
     except Exception:
-        return 0
+        return ""
+
+
+def _write_stdout(text: str) -> None:
+    if sys.stdout is not None:
+        try:
+            print(text, flush=True)
+            return
+        except Exception:
+            pass
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        k32.GetStdHandle.restype = wintypes.HANDLE
+        h = k32.GetStdHandle(-11)          # STD_OUTPUT_HANDLE
+        data = (text + "\n").encode("utf-8")
+        n = wintypes.DWORD(0)
+        k32.WriteFile(wintypes.HANDLE(h), data, len(data), ctypes.byref(n), None)
+    except Exception:
+        pass
+
+
+def main() -> int:
+    raw = _read_stdin()
     if not raw.strip():
         return 0
     # Validate + compact to a single line (the listener reads one line per event).
@@ -88,7 +134,7 @@ def main() -> int:
                     out = _permission_output(
                         str(json.loads(buf.decode("utf-8")).get("decision") or ""))
                     if out:
-                        print(out)
+                        _write_stdout(out)
     except Exception:
         # Daemon not running / lamp not in use — that's fine, do nothing.
         pass
